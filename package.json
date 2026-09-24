@@ -1,0 +1,32 @@
+{
+  "name": "@cv-hub/orca-plugin",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "vitest run",
+    "type-check": "tsc --noEmit",
+    "test:package": "node scripts/check-package.mjs",
+    "package": "node scripts/build.mjs && node scripts/check-package.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "0.27.2",
+    "typescript": "~5.9.3",
+    "vitest": "^3.0.0"
+  },
+  "description": "CV Hub plugin for Orca: OAuth device sign-in, pull request browsing, native Orca diffs, reviews and MCP code search.",
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lamtuanvu/cv-hub-orca-plugin.git"
+  }
+}
