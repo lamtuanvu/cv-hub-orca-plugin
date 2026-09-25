@@ -3,6 +3,8 @@ export const repoInput = z.object({
   owner: z.string().min(1).max(255),
   repo: z.string().min(1).max(255),
 });
+/** Production CV Hub's API. Connection settings take another origin for self-hosted or local servers. */
+export const DEFAULT_ORIGIN = "https://api.hub.controlvector.io";
 export const pullInput = repoInput.extend({ number: z.number().int().positive() });
 export const sha = z.string().regex(/^[a-f0-9]{40}$/);
 export const fileSchema = z.object({

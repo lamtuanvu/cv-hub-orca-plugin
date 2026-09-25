@@ -4,6 +4,7 @@ import { h, add, button, type Child } from "./dom";
 import { icon, spinner, type IconName } from "./icons";
 import { markdown } from "./markdown";
 import { watchTheme } from "./theme";
+import { DEFAULT_ORIGIN } from "../shared/contracts";
 import logoUrl from "./assets/cv-logo.png";
 import "./style.css";
 
@@ -127,7 +128,7 @@ const S = {
   conn: null as Connection | null,
   legacy: null as { origin: string; username: string } | null,
   attempt: null as Attempt | null,
-  auth: { busy: false, error: null as Failure | null, server: "", showSettings: false, serverError: "", copied: "" as "" | "Code" | "Address" },
+  auth: { busy: false, error: null as Failure | null, server: DEFAULT_ORIGIN, showSettings: false, serverError: "", copied: "" as "" | "Code" | "Address" },
   screen: "auth" as "auth" | "repos" | "main",
   repos: idle<{ items: Array<{ owner: string; repo: string }>; total: number }>({ items: [], total: 0 }),
   repoQuery: "",
@@ -487,7 +488,7 @@ function settings() {
     ),
   );
   if (!S.auth.showSettings) {
-    add(wrap, h("p", { class: "fine" }, S.auth.server ? ["Server: ", h("span", { class: "mono" }, host(S.auth.server))] : "No server set — open Connection settings to add your CV Hub API address."));
+    add(wrap, h("p", { class: "fine" }, S.auth.server ? ["Server: ", h("span", { class: "mono" }, host(S.auth.server)), S.auth.server === DEFAULT_ORIGIN ? " (CV Hub)" : ""] : "No server set — open Connection settings to add your CV Hub API address."));
     return wrap;
   }
   const input = h("input", {
@@ -519,7 +520,7 @@ function settings() {
       input,
       S.auth.serverError
         ? h("p", { class: "fine bad", id: "srvh" }, icon("warn", "s"), S.auth.serverError)
-        : h("p", { class: "fine", id: "srvh" }, "The API origin, not the web app or an /api path. HTTPS is required except for localhost development, e.g. http://localhost:3001."),
+        : h("p", { class: "fine", id: "srvh" }, `The API origin, not the web app or an /api path. CV Hub is ${DEFAULT_ORIGIN}; for a self-hosted server use its API origin. HTTPS is required except for localhost development, e.g. http://localhost:3001.`),
     ),
   );
   return wrap;
@@ -1532,7 +1533,7 @@ setInterval(() => {
     S.conn = status.connection;
     S.legacy = status.legacy;
     S.attempt = status.attempt?.phase === "connected" ? null : status.attempt;
-    S.auth.server = status.connection?.origin ?? status.attempt?.origin ?? status.legacy?.origin ?? "";
+    S.auth.server = status.connection?.origin ?? status.attempt?.origin ?? status.legacy?.origin ?? DEFAULT_ORIGIN;
     // A panel reload during sign-in resumes the worker-owned attempt.
     if (S.attempt?.phase === "pending") pollAuth();
     if (S.conn && !S.conn.expired) openRepos();
