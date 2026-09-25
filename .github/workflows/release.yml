@@ -1,0 +1,85 @@
+name: Build and release
+
+# Every push to main builds, tests and packages the plugin, then publishes it:
+# - the first push at a new version (no v<version> tag yet) creates the v<version> release;
+# - later pushes at the same version refresh the rolling "edge" prerelease.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm type-check
+      - run: pnpm test
+      - run: pnpm run package
+
+      - name: Check versions and committed manifest
+        id: version
+        run: |
+          version=$(node -p "require('./dist/orca-plugin.json').version")
+          pkg=$(node -p "require('./package.json').version")
+          if [ "$version" != "$pkg" ]; then
+            echo "::error::package.json is $pkg but PLUGIN_VERSION is $version"
+            exit 1
+          fi
+          # The build regenerates orca-plugin.json; the committed copy must match.
+          git diff --exit-code -- orca-plugin.json
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Zip plugin
+        run: |
+          mkdir -p artifacts
+          cd dist
+          zip -X "../artifacts/cv-hub-orca-${{ steps.version.outputs.version }}.zip" \
+            main.mjs panel.html orca-plugin.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cv-hub-orca-${{ steps.version.outputs.version }}
+          path: artifacts/*.zip
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          zip="artifacts/cv-hub-orca-$VERSION.zip"
+          short=$(git rev-parse --short HEAD)
+          notes="Requires Orca with the hardened native plugin review host ([lamtuanvu/orca@75b02825](https://github.com/lamtuanvu/orca/commit/75b02825)); stock Orca cannot load this plugin. Unzip and install the folder from Settings → Plugins."
+          if ! git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+            gh release create "v$VERSION" "$zip" \
+              --target "$GITHUB_SHA" \
+              --title "CV Hub for Orca $VERSION" \
+              --notes "$notes"
+          else
+            git tag -f edge "$GITHUB_SHA"
+            git push -f origin refs/tags/edge
+            gh release delete edge --yes 2>/dev/null || true
+            cp "$zip" artifacts/cv-hub-orca-edge.zip
+            gh release create edge artifacts/cv-hub-orca-edge.zip \
+              --prerelease --latest=false \
+              --title "CV Hub for Orca $VERSION (edge $short)" \
+              --notes "Latest build of main at $short. $notes"
+          fi
