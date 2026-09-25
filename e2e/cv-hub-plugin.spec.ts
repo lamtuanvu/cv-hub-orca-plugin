@@ -25,7 +25,7 @@ test('opens immutable CV Hub contents in the native diff viewer', async ({
     const url = new URL(req.url ?? '/', origin)
     requests.push(url.pathname + url.search)
     res.setHeader('Content-Type', 'application/json')
-    // OAuth device authorization (RFC 8628) for the public client `cv-hub-orca`. The fixture
+    // OAuth device authorization (RFC 8628) for the public client `cv-git-cli`. The fixture
     // approves on the second poll; a real deployment waits for the human on /device.
     if (url.pathname === '/oauth/device/authorize') {
       res.end(

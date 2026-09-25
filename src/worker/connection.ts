@@ -11,9 +11,10 @@ import {
   type Fetch,
 } from "./rest-client";
 
-/** Public OAuth device client registered on each CV Hub deployment with CV Hub's own
- *  register-device-agent-client script (see README). No secret exists or is needed. */
-export const CLIENT_ID = "cv-hub-orca";
+/** CV Hub's public device-flow client for its own CLI tools, which every deployment ships
+ *  (migration 0017_cv_git_oauth_client), so the plugin needs no per-server registration. The
+ *  plugin still requests only the scopes below, not the client's full set. No secret exists. */
+export const CLIENT_ID = "cv-git-cli";
 /** repo:write lets the plugin publish PR reviews; offline_access yields a refresh token. */
 export const REQUESTED_SCOPES = ["profile", "repo:read", "repo:write", "offline_access"];
 const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
@@ -229,7 +230,7 @@ export class Connection {
       if (code === "invalid_client" || code === "unauthorized_client")
         throw new CvHubError(
           "invalid_client",
-          "This CV Hub server hasn’t registered the Orca plugin (client cv-hub-orca). Ask an administrator to register it (see the plugin README).",
+          "This CV Hub server doesn’t have the sign-in client the plugin uses (cv-git-cli). Ask an administrator to check its OAuth clients.",
         );
       if (code === "invalid_scope")
         throw new CvHubError("invalid_client", "This CV Hub server doesn’t allow the plugin’s scopes");

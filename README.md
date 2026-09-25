@@ -2,24 +2,18 @@
 
 Desktop plugin for CV Hub hosted Git repositories. Sign in with CV Hub in your browser, browse repositories and pull requests, open their changes in **Orca's native Monaco DiffViewer**, inspect CI checks and review history, submit a top-level review, and search code through CV Hub's Streamable HTTP MCP server.
 
-**Requires Orca with the hardened native plugin review host — [lamtuanvu/orca PR #1](https://github.com/lamtuanvu/orca/pull/1) at commit `75b02825` ([contract](https://github.com/lamtuanvu/orca/blob/75b02825f77fae229b4c4e91f42f6600e761c61a/docs/reference/plugin-panel-review-api.md)) — and a CV Hub deployment with the plugin's OAuth client registered. No CV Hub code change is needed: the plugin uses the same API as CV Hub's web app. Stock Orca cannot load this plugin.** Orca 1.4.197 is the research base, not a claim of compatibility with its unpatched release. Nothing here installs over your existing Orca app or registers MCP with your coding agent automatically.
+**Requires Orca with the hardened native plugin review host — [lamtuanvu/orca PR #1](https://github.com/lamtuanvu/orca/pull/1) at commit `75b02825` ([contract](https://github.com/lamtuanvu/orca/blob/75b02825f77fae229b4c4e91f42f6600e761c61a/docs/reference/plugin-panel-review-api.md)) — and nothing extra on the CV Hub side: the plugin signs in with the OAuth client every CV Hub deployment already has, and uses the same API as CV Hub's web app. Stock Orca cannot load this plugin.** Orca 1.4.197 is the research base, not a claim of compatibility with its unpatched release. Nothing here installs over your existing Orca app or registers MCP with your coding agent automatically.
 
 ## Build and install
 
 This repository holds the plugin only; the server side lives in [controlvector/cv-hub](https://hub.controlvector.io/controlvector/cv-hub). Design notes and the original implementation plan are in [`docs/design/`](docs/design/).
 
-1. Register the plugin's public OAuth client once per CV Hub deployment, with the registration script CV Hub already ships for device-flow clients (`apps/api/scripts/register-device-agent-client.ts`, the one `cva` uses). It is idempotent and creates no secret:
+1. Nothing to set up on CV Hub. The plugin signs in as `cv-git-cli`, the public device-flow client CV Hub ships in every deployment for its own CLI tools (migration `0017_cv_git_oauth_client.sql`). Check a server with `GET <api-origin>/oauth/client-info/cv-git-cli`.
 
-   ```sh
-   # in the cv-hub repository, against the target deployment's database
-   cd apps/api && DEVICE_CLIENT_ID=cv-hub-orca DEVICE_CLIENT_NAME="CV Hub for Orca" \
-     DEVICE_SCOPES=profile,repo:read,repo:write,offline_access \
-     env -u NODE_OPTIONS npx tsx --env-file=.env scripts/register-device-agent-client.ts
-   ```
-
-   The script loads the API's full configuration, so point `--env-file` at the target deployment's environment (or export `DATABASE_URL` and use `pnpm --filter @cv-hub/api register:device-agent-client`). Confirm with `GET <api-origin>/oauth/client-info/cv-hub-orca`.
-
-   This upserts client `cv-hub-orca` ("CV Hub for Orca"): public, device grant, scopes `profile repo:read repo:write offline_access`, not first-party, so CV Hub shows its consent screen. Refresh tokens work as they do for `cva`: CV Hub issues one for `offline_access` and doesn't limit refreshes by grant type.
+   What that means:
+   - The plugin requests only `profile repo:read repo:write offline_access`, not the client's full scope set (which includes `repo:admin`).
+   - The client is first-party, so CV Hub's approval page asks you to confirm the code but shows no separate consent screen.
+   - In CV Hub's Authorized apps and audit logs, the plugin appears as the cv-git CLI. Revoking that app there signs out cv-git as well as Orca; to sign out only Orca, use **Sign out** in the plugin, which revokes its own tokens.
 2. In this repository, run:
 
    ```sh
@@ -66,7 +60,7 @@ This version uses a native **dialog with one selected file**, not a central edit
 
 ## Reviews and authentication
 
-Sign-in is the OAuth 2.0 device authorization grant (RFC 8628) with the public client `cv-hub-orca`. The worker requests the code, polls `/oauth/token` (honoring `interval`, `slow_down`, expiry, denial, and a bounded offline backoff), and verifies identity (`/api/auth/me`) and MCP discovery with the new token before declaring the connection complete. The device code, access token and refresh token never reach the panel: the panel sees an opaque attempt ID, the user code, the verification address, and the account profile. Tokens live only in Orca's encrypted secret store; profile metadata uses private plugin storage.
+Sign-in is the OAuth 2.0 device authorization grant (RFC 8628) with CV Hub's public CLI client `cv-git-cli`. The worker requests the code, polls `/oauth/token` (honoring `interval`, `slow_down`, expiry, denial, and a bounded offline backoff), and verifies identity (`/api/auth/me`) and MCP discovery with the new token before declaring the connection complete. The device code, access token and refresh token never reach the panel: the panel sees an opaque attempt ID, the user code, the verification address, and the account profile. Tokens live only in Orca's encrypted secret store; profile metadata uses private plugin storage.
 
 The worker validates the verification address before offering to open it: it must be CV Hub's `/device` page on the API origin, or on the web host beside an `api.` API host (API `https://api.hub.example.com` → page `https://hub.example.com/device`), which is how CV Hub is deployed. A loopback API accepts a loopback page on any port, for local development. It then registers the URL with Orca (`browser.createAuthorization`, remaining lifetime capped at 900 s) and asks Orca to open it (`browser.openAuthorization`), which shows a native confirmation naming the server and destination. The panel command returns immediately; the confirmation outcome arrives through status polling, and each handle is cancelled after use, on completion, denial, failure or cancellation. Orca's handles never reach the panel. When Orca can't open the browser — declined, rate limited (one request per ten seconds), reset by a plugin refresh, missing host support, or an address the worker couldn't verify — the panel says why and always shows the user code and a copyable verification address. **Copy code**/**Copy address** use the clipboard when the sandbox allows it and otherwise select the text for ⌘C/Ctrl+C.
 
