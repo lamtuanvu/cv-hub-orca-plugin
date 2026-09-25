@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { Connection, type Clock } from "./connection";
-import { readReviewFile } from "./pr-review";
+import { DiffCache, fetchDiff, readReviewFile } from "./pr-review";
 import { searchCode } from "./mcp-client";
-import { pullInput, pullPath, snapshotSchema, type Orca } from "../shared/contracts";
+import { pullInput, pullPath, type Orca } from "../shared/contracts";
 import { PANEL_COMMANDS, PAGE_SIZE, PRIVATE_COMMANDS } from "../shared/panel-contracts";
 import { PANEL_PAYLOAD_LIMIT, byteLength, compileDataSchema } from "../shared/panel-schema";
 import { CvHubError, type Fetch } from "./rest-client";
@@ -20,6 +20,20 @@ function fitBudget<T extends Record<K, string>, K extends string>(wrap: (items: 
   return out;
 }
 
+/** The source branch's current head, read from git. The PR's own `sourceSha` is set when the PR
+ *  is created and not updated on push, so it can't say whether the inspected revision is current. */
+async function branchHead(
+  client: { json(path: string): Promise<unknown> },
+  pull: { owner: string; repo: string; sourceBranch: string },
+): Promise<string | null> {
+  const query = new URLSearchParams({ ref: `refs/heads/${pull.sourceBranch}`, limit: "1" });
+  const { commits } = z
+    .object({ commits: z.array(z.object({ sha: z.string() })) })
+    .parse(await client.json(`/api/v1/repos/${encodeURIComponent(pull.owner)}/${encodeURIComponent(pull.repo)}/commits?${query}`));
+  const head = commits[0]?.sha;
+  return head && /^[a-f0-9]{40}$/.test(head) ? head : null;
+}
+
 /** Only a worker-coded error crosses to the panel. Anything else (schema failures, library
  *  errors, stack traces) becomes a generic message, so no response bodies, headers or tokens
  *  can leak through an exception. */
@@ -33,6 +47,7 @@ export function sanitize(error: unknown): Error {
 
 export function registerCommands(orca: Orca, fetcher?: Fetch, clock?: Clock) {
   const connection = new Connection(orca.host, fetcher, clock);
+  const diffs = new DiffCache();
   const outputs = new Map(Object.entries(PANEL_COMMANDS).map(([id, c]) => [id, compileDataSchema(c.output)]));
   const inputs = new Map(Object.entries(PANEL_COMMANDS).map(([id, c]) => [id, compileDataSchema(c.input)]));
   /** Panel-callable command: validated in and out against the same contract the host enforces. */
@@ -127,6 +142,11 @@ export function registerCommands(orca: Orca, fetcher?: Fetch, clock?: Clock) {
   panel("getPull", async (args: { owner: string; repo: string; number: number }) => {
     const client = await connection.client();
     const { pullRequest: p } = z.object({ pullRequest: pullItem }).parse(await client.json(pullPath(args)));
+    // Merged or closed PRs may have lost their branch; their recorded SHA is the best we have.
+    // A failed lookup only loses the "new commits" hint; submitting checks the head again.
+    const head =
+      p.state === "open" ? await branchHead(client, { ...args, sourceBranch: p.sourceBranch }).catch(() => null) : null;
+    const recorded = p.sourceSha && /^[a-f0-9]{40}$/.test(p.sourceSha) ? p.sourceSha : null;
     return {
       number: p.number,
       title: clip(p.title, 512),
@@ -136,7 +156,7 @@ export function registerCommands(orca: Orca, fetcher?: Fetch, clock?: Clock) {
       body: clip(p.body, 12000),
       sourceBranch: clip(p.sourceBranch, 1024),
       targetBranch: clip(p.targetBranch, 1024),
-      sourceSha: p.sourceSha && /^[a-f0-9]{40}$/.test(p.sourceSha) ? p.sourceSha : null,
+      sourceSha: head ?? recorded,
       createdAt: nullableClip(p.createdAt, 64),
       updatedAt: nullableClip(p.updatedAt, 64),
       canWrite: client.canWrite,
@@ -203,10 +223,17 @@ export function registerCommands(orca: Orca, fetcher?: Fetch, clock?: Clock) {
           "read_only",
           "This sign-in was granted read-only access. Sign in again and allow repo:write to publish reviews",
         );
+      // Refuse a review of a revision that is no longer the head. CV Hub versions that check
+      // expectedHeadSha themselves answer 409 for a push that lands after this check; older ones
+      // ignore the field, so this check is all that stands between the two.
+      const { pullRequest } = z.object({ pullRequest: pullItem }).parse(await client.json(pullPath(args)));
+      const head = await branchHead(client, { ...args, sourceBranch: pullRequest.sourceBranch });
+      if (head !== args.expectedHeadSha)
+        throw new CvHubError("stale_revision", "The PR changed. Open and review its latest changes before submitting");
       const result = z
         .object({ review: z.object({ id: z.string(), state: z.string() }) })
         .parse(
-          // Tied to the inspected head: the server answers 409 if the PR moved on. Never retried.
+          // Never retried: a lost response is reported as an unknown outcome.
           await client.json(`${pullPath(args)}/reviews`, {
             method: "POST",
             body: JSON.stringify({ state: args.state, body: args.body, expectedHeadSha: args.expectedHeadSha }),
@@ -235,13 +262,19 @@ export function registerCommands(orca: Orca, fetcher?: Fetch, clock?: Clock) {
   worker("getReview", async (args) => {
     const input = pullInput.parse(args);
     const client = await connection.client();
-    const { snapshot } = z.object({ snapshot: snapshotSchema }).parse(await client.json(`${pullPath(input)}/review-snapshot`));
-    const { files, title, ...context } = snapshot;
+    const json = (path: string, limit: number) => client.json(path, {}, limit);
+    const [pull, diff] = await Promise.all([
+      client.json(pullPath(input)).then((r) => z.object({ pullRequest: z.object({ title: z.string() }) }).parse(r).pullRequest),
+      fetchDiff({ connectionId: client.connectionId, json }, input),
+    ]);
+    if (diff.files.length > 2000)
+      throw new CvHubError("too_large", "This pull request changes more than 2,000 files, too many for Orca's review");
+    diffs.put(client.connectionId, input, diff);
     return {
-      title: `${input.owner}/${input.repo} #${input.number} · ${title}`.slice(0, 512),
-      revision: snapshot.headSha,
-      context: { ...context, connectionId: client.connectionId },
-      files: files.map((f) => ({
+      title: `${input.owner}/${input.repo} #${input.number} · ${pull.title}`.slice(0, 512),
+      revision: diff.headSha,
+      context: { ...input, connectionId: client.connectionId, baseSha: diff.baseSha, headSha: diff.headSha },
+      files: diff.files.map((f) => ({
         path: f.path,
         ...(f.oldPath ? { oldPath: f.oldPath } : {}),
         status: f.status,
@@ -253,10 +286,7 @@ export function registerCommands(orca: Orca, fetcher?: Fetch, clock?: Clock) {
   });
   worker("readReviewFile", async (args) => {
     const client = await connection.client();
-    return readReviewFile(args, {
-      connectionId: client.connectionId,
-      json: (path) => client.json(path, {}, 16 * 1024 * 1024),
-    });
+    return readReviewFile(args, { connectionId: client.connectionId, json: (path, limit) => client.json(path, {}, limit) }, diffs);
   });
 }
 export default function activate(orca: Orca) {

@@ -69,28 +69,28 @@ test('opens immutable CV Hub contents in the native diff viewer', async ({
         repositories: [{ id: 'r', slug: 'demo', owner: { slug: 'acme' } }],
         pagination: { total: 1 }
       }
-    } else if (url.pathname.endsWith('/review-snapshot')) {
+    } else if (url.pathname.endsWith('/pulls/7/diff')) {
+      // The same response CV Hub's web page renders: hunks relative to the merge base.
       body = {
-        snapshot: {
-          owner: 'acme',
-          repo: 'demo',
-          repositoryId: 'r',
-          number: 7,
-          title: 'Change greeting',
+        diff: {
           baseSha: base,
-          mergeBaseSha: base,
           headSha: head,
-          files: [{ path: 'hello.ts', status: 'modified', additions: 1, deletions: 1 }]
+          files: [
+            {
+              path: 'hello.ts',
+              status: 'modified',
+              additions: 1,
+              deletions: 1,
+              patch: '@@ -1 +1 @@\n-export const greeting = "before"\n+export const greeting = "after"\n'
+            }
+          ]
         }
       }
-    } else if (url.pathname.endsWith('/review-file')) {
-      body = {
-        kind: 'text',
-        content:
-          url.searchParams.get('sha') === base
-            ? 'export const greeting = "before"\n'
-            : 'export const greeting = "after"\n'
-      }
+    } else if (url.pathname === `/api/v1/repos/acme/demo/blob/${head}/hello.ts`) {
+      const content = 'export const greeting = "after"\n'
+      body = { path: 'hello.ts', size: content.length, isBinary: false, content, encoding: 'utf-8' }
+    } else if (url.pathname === '/api/v1/repos/acme/demo/commits') {
+      body = { ref: url.searchParams.get('ref'), commits: [{ sha: head, message: 'Change greeting' }] }
     } else {
       const pull = {
         number: 7,
@@ -161,12 +161,8 @@ test('opens immutable CV Hub contents in the native diff viewer', async ({
     await expect(review).toBeVisible()
     await expect(review.locator('.monaco-diff-editor')).toBeVisible()
     await expect(review.locator('.view-lines')).toContainText(['before', 'after'])
-    expect(requests).toContain(
-      `/api/v1/repos/acme/demo/pulls/7/review-file?sha=${base}&path=hello.ts`
-    )
-    expect(requests).toContain(
-      `/api/v1/repos/acme/demo/pulls/7/review-file?sha=${head}&path=hello.ts`
-    )
+    expect(requests).toContain('/api/v1/repos/acme/demo/pulls/7/diff')
+    expect(requests).toContain(`/api/v1/repos/acme/demo/blob/${head}/hello.ts`)
     await review.screenshot({ path: testInfo.outputPath('native-review.png') })
     await review.getByRole('button', { name: 'Unified view' }).click()
     await review.getByRole('button', { name: 'Close', exact: true }).click()

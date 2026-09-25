@@ -11,8 +11,8 @@ import {
   type Fetch,
 } from "./rest-client";
 
-/** Public OAuth device client registered on each CV Hub deployment
- *  (apps/api/scripts/register-orca-plugin-client.ts). No secret exists or is needed. */
+/** Public OAuth device client registered on each CV Hub deployment with CV Hub's own
+ *  register-device-agent-client script (see README). No secret exists or is needed. */
 export const CLIENT_ID = "cv-hub-orca";
 /** repo:write lets the plugin publish PR reviews; offline_access yields a refresh token. */
 export const REQUESTED_SCOPES = ["profile", "repo:read", "repo:write", "offline_access"];
@@ -102,10 +102,6 @@ const oauthErrorSchema = z.object({
   interval: z.number().optional(),
 });
 
-const discoverySchema = z.object({
-  device_authorization_endpoint: z.string().optional(),
-  cv_hub_device_verification_uri: z.string().optional(),
-});
 const UNVERIFIED =
   "Orca can’t confirm this address belongs to your CV Hub server, so it won’t open it. Enter the code there yourself only if you trust the address.";
 const UNAVAILABLE =
@@ -233,7 +229,7 @@ export class Connection {
       if (code === "invalid_client" || code === "unauthorized_client")
         throw new CvHubError(
           "invalid_client",
-          "This CV Hub server hasn’t registered the Orca plugin (client cv-hub-orca). Ask an administrator to run register:orca-plugin-client.",
+          "This CV Hub server hasn’t registered the Orca plugin (client cv-hub-orca). Ask an administrator to register it (see the plugin README).",
         );
       if (code === "invalid_scope")
         throw new CvHubError("invalid_client", "This CV Hub server doesn’t allow the plugin’s scopes");
@@ -242,7 +238,7 @@ export class Connection {
     const device = deviceAuthorizationSchema.parse(result.data);
     safeBrowserUrl(device.verification_uri);
     if (device.verification_uri_complete) safeBrowserUrl(device.verification_uri_complete);
-    const verifiedUrl = await this.verifyDestination(origin, device);
+    const verifiedUrl = this.verifyDestination(origin, device);
     if (generation !== this.generation) throw new CvHubError("cancelled", "Sign-in was cancelled");
     this.attempt = {
       attemptId: randomUUID(),
@@ -262,34 +258,23 @@ export class Connection {
     this.schedulePoll(this.attempt);
     return this.attemptView();
   }
-  /** The device response names a browser destination; accept it only when the server's own
-   *  discovery metadata vouches for it (the web app may live on another origin than the API).
-   *  Servers without the metadata are trusted only for a same-origin /device page. */
-  private async verifyDestination(
-    origin: string,
-    device: z.infer<typeof deviceAuthorizationSchema>,
-  ): Promise<string | null> {
-    const candidate = device.verification_uri_complete ?? device.verification_uri;
-    let expected: URL | null = null;
-    try {
-      const response = await this.fetcher(new URL("/.well-known/oauth-authorization-server", origin), {
-        redirect: "error",
-        signal: AbortSignal.timeout(10000),
-        headers: { Accept: "application/json" },
-      });
-      if (response.ok) {
-        const meta = discoverySchema.parse(await readBoundedJson(response, 64 * 1024));
-        const endpoint = meta.device_authorization_endpoint;
-        if (endpoint && new URL(endpoint).href === new URL("/oauth/device/authorize", origin).href && meta.cv_hub_device_verification_uri)
-          expected = new URL(safeBrowserUrl(meta.cv_hub_device_verification_uri));
-      } else await response.body?.cancel();
-    } catch {
-      /* fall through to the same-origin rule */
-    }
-    expected ??= new URL("/device", origin);
-    for (const url of [candidate, device.verification_uri]) {
+  /** The device response names a browser destination; accept it only when it is CV Hub's
+   *  approval page (`/device`) on a host that belongs to this deployment: the API's own origin,
+   *  or the web app beside an `api.` API host (api.hub.example.com → hub.example.com), which is
+   *  how CV Hub is deployed. A loopback API accepts a loopback page on any port, for local
+   *  development where the web app runs on its own port. */
+  private verifyDestination(origin: string, device: z.infer<typeof deviceAuthorizationSchema>): string | null {
+    const api = new URL(origin);
+    const allowed = (u: URL) => {
+      if (u.pathname !== "/device" || u.username || u.password || u.hash) return false;
+      if (u.origin === api.origin) return true;
+      if (isLoopback(api.hostname)) return isLoopback(u.hostname);
+      return u.protocol === "https:" && u.port === "" && api.port === "" && api.hostname.startsWith("api.") && u.hostname === api.hostname.slice(4);
+    };
+    for (const url of [device.verification_uri_complete, device.verification_uri]) {
+      if (!url) continue;
       const u = new URL(url);
-      if (u.origin === expected.origin && u.pathname === expected.pathname) return u.href;
+      if (allowed(u)) return u.href;
     }
     return null;
   }

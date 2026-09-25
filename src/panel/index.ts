@@ -439,7 +439,7 @@ function authScreen() {
     denied: { title: "Access was denied", text: "The sign-in request was declined in the browser. Nothing was stored in Orca.", p: "Try again" },
     expired: { title: "The code expired", text: "Verification codes are valid for a limited time. Request a new code to continue.", p: "Get a new code", tone: "warn" },
     offline: { title: `Can’t reach ${host(S.auth.server)}`, text: "Orca couldn’t connect to the CV Hub server. Check the address and your network connection, then try again.", p: "Try again" },
-    invalid_client: { title: "This server isn’t set up for Orca yet", text: "CV Hub doesn’t recognise the plugin’s sign-in client (cv-hub-orca). An administrator needs to run the API’s register:orca-plugin-client script on this deployment.", p: "Try again" },
+    invalid_client: { title: "This server isn’t set up for Orca yet", text: "CV Hub doesn’t recognise the plugin’s sign-in client (cv-hub-orca). An administrator needs to register it on this deployment (see the plugin README).", p: "Try again" },
     invalid_origin: { title: "Check the server address", text: S.auth.error?.message ?? "", p: "Try again" },
     interrupted: { title: "Sign-in was interrupted", text: "Orca restarted or updated the plugin while you were signing in, which ends the request. Start again to get a new code.", p: "Start again", tone: "warn" },
     host_unsupported: { title: "This Orca build is too old for CV Hub", text: "The plugin needs Orca’s explicit panel-command, native review and browser-authorization host (lamtuanvu/orca 75b02825 or later). Update Orca, then reopen this panel.", p: "Retry", tone: "warn" },

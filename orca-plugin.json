@@ -3,7 +3,7 @@
   "id": "cv-hub",
   "publisher": "controlvector",
   "name": "CV Hub",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Review CV Hub pull requests in Orca's native diff viewer, check CI and reviews, and search code through MCP. Signs in with CV Hub OAuth in your browser. Requires Orca with the native plugin review host (lamtuanvu/orca 75b02825).",
   "engines": {
     "orca": ">=1.4.197"

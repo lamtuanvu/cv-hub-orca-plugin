@@ -1,6 +1,6 @@
 import { PANEL_COMMANDS, PRIVATE_COMMANDS, REVIEW_PROVIDER } from "./panel-contracts";
 
-export const PLUGIN_VERSION = "0.2.0";
+export const PLUGIN_VERSION = "0.3.0";
 
 /** The full Orca manifest. scripts/build.mjs writes it to orca-plugin.json and dist/. */
 export function buildManifest() {

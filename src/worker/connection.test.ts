@@ -98,11 +98,6 @@ const identity: Record<string, Route> = {
     Response.json({ mcpUrl: "http://localhost:3001/mcp", transport: "streamable-http" }),
 };
 const ORIGIN = "http://localhost:3001";
-/** The API's RFC 8414 metadata naming its web app's approval page (apps/api/src/app.ts). */
-const discovery = (verification = "http://localhost:5174/device"): Record<string, Route> => ({
-  "/.well-known/oauth-authorization-server": () =>
-    Response.json({ device_authorization_endpoint: `${ORIGIN}/oauth/device/authorize`, cv_hub_device_verification_uri: verification }),
-});
 const FULL = "profile repo:read repo:write offline_access";
 
 describe("OAuth device sign-in", () => {
@@ -220,7 +215,7 @@ describe("OAuth device sign-in", () => {
   it("hands the verified URL to Orca's browser authorization without blocking the command", async () => {
     let confirm!: (v: { opened: boolean }) => void;
     const { host, calls } = hostFixture({ open: () => new Promise((r) => (confirm = r)) });
-    const s = server({ "/oauth/device/authorize": deviceOk, ...discovery() });
+    const s = server({ "/oauth/device/authorize": deviceOk });
     const c = new Connection(host, s.fetcher, clockFixture().clock);
     const { attemptId, browser } = (await c.start({ origin: ORIGIN }))!;
     expect(browser).toBe("idle");
@@ -239,12 +234,11 @@ describe("OAuth device sign-in", () => {
     await expect(Promise.resolve().then(() => c.openVerification({ attemptId: "other" }))).rejects.toThrow("[no_attempt]");
   });
 
-  it("refuses to open a verification URL the server's discovery does not vouch for", async () => {
+  it("refuses to open a verification URL outside this deployment", async () => {
     const { host, calls } = hostFixture();
     const s = server({
       "/oauth/device/authorize": () =>
         Response.json({ device_code: "D", user_code: "WDJB-MJHT", verification_uri: "https://phish.example/device", expires_in: 900, interval: 5 }),
-      ...discovery(),
     });
     const c = new Connection(host, s.fetcher, clockFixture().clock);
     const { attemptId, browser, browserMessage } = (await c.start({ origin: ORIGIN }))!;
@@ -254,19 +248,34 @@ describe("OAuth device sign-in", () => {
     expect(calls.some((x) => x.method.startsWith("browser."))).toBe(false);
   });
 
-  it("without discovery metadata, trusts only a same-origin /device page", async () => {
-    const same = server({
-      "/oauth/device/authorize": () =>
-        Response.json({ device_code: "D", user_code: "C", verification_uri: `${ORIGIN}/device`, expires_in: 900 }),
-    });
-    const other = server({ "/oauth/device/authorize": deviceOk });
-    expect((await new Connection(hostFixture().host, same.fetcher, clockFixture().clock).start({ origin: ORIGIN }))!.browser).toBe("idle");
-    expect((await new Connection(hostFixture().host, other.fetcher, clockFixture().clock).start({ origin: ORIGIN }))!.browser).toBe("unverified");
+  it("trusts CV Hub's approval page on the API origin or the web host beside an api. host", async () => {
+    const browserFor = async (origin: string, verification: string) => {
+      const s = server({
+        "/oauth/device/authorize": () =>
+          Response.json({ device_code: "D", user_code: "C", verification_uri: verification, expires_in: 900 }),
+      });
+      return (await new Connection(hostFixture().host, s.fetcher, clockFixture().clock).start({ origin }))!.browser;
+    };
+    // Production layout: api.hub.example.com serves the API, hub.example.com the web app.
+    expect(await browserFor("https://api.hub.example.com", "https://hub.example.com/device")).toBe("idle");
+    expect(await browserFor("https://api.hub.example.com", "https://api.hub.example.com/device")).toBe("idle");
+    expect(await browserFor("https://hub.example.com", "https://hub.example.com/device")).toBe("idle");
+    // Local development: the web app runs on its own loopback port.
+    expect(await browserFor(ORIGIN, "http://localhost:5174/device")).toBe("idle");
+    for (const [origin, url] of [
+      ["https://api.hub.example.com", "https://evil.example.com/device"],
+      ["https://api.hub.example.com", "https://hub.example.com.evil.example/device"],
+      ["https://api.hub.example.com", "https://hub.example.com/login"],
+      ["https://api.hub.example.com", "https://hub.example.com:8443/device"],
+      ["https://hub.example.com", "https://example.com/device"],
+      ["https://api.hub.example.com", "http://localhost:5174/device"],
+    ])
+      expect(await browserFor(origin, url)).toBe("unverified");
   });
 
   it("explains an Orca without browser:authorize and a host rate limit", async () => {
     const old = hostFixture({ create: () => { throw new Error("unknown method browser.createAuthorization"); } });
-    const s = server({ "/oauth/device/authorize": deviceOk, ...discovery() });
+    const s = server({ "/oauth/device/authorize": deviceOk });
     const c = new Connection(old.host, s.fetcher, clockFixture().clock);
     const { attemptId } = (await c.start({ origin: ORIGIN }))!;
     c.openVerification({ attemptId });
@@ -286,7 +295,6 @@ describe("OAuth device sign-in", () => {
     const s = server({
       "/oauth/device/authorize": deviceOk,
       "/oauth/token": () => Response.json({ error: "access_denied" }, { status: 400 }),
-      ...discovery(),
     });
     const c = new Connection(host, s.fetcher, clock);
     const { attemptId } = (await c.start({ origin: ORIGIN }))!;

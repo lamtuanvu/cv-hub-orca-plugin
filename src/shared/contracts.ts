@@ -13,20 +13,11 @@ export const fileSchema = z.object({
   deletions: z.number().int().nonnegative(),
   binary: z.boolean().optional(),
 });
+/** Everything a native review's loaders need, pinned to the revisions the review opened at. */
 export const contextSchema = pullInput.extend({
   connectionId: z.string(),
-  repositoryId: z.string(),
   baseSha: sha,
-  mergeBaseSha: sha,
   headSha: sha,
-});
-export const snapshotSchema = pullInput.extend({
-  repositoryId: z.string(),
-  title: z.string().max(512),
-  baseSha: sha,
-  mergeBaseSha: sha,
-  headSha: sha,
-  files: z.array(fileSchema).max(2000),
 });
 export const sideSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("text"), content: z.string().max(2 * 1024 * 1024) }),

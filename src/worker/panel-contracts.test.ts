@@ -39,13 +39,15 @@ const hostileApi = async (input: string | URL | Request) => {
     return Response.json({ repositories: Array.from({ length: 25 }, (_, i) => ({ id: `r${i}`, slug: `repo-${i}`, owner: { slug: "acme", id: "o" }, ...extra })), pagination: { total: 25 } });
   if (url.pathname.endsWith("/pulls")) return Response.json({ pullRequests: Array.from({ length: 25 }, (_, i) => p(i + 1)), total: 25 });
   if (url.pathname.endsWith("/pulls/7")) return Response.json({ pullRequest: p(7) });
+  if (url.pathname.endsWith("/commits"))
+    return Response.json({ commits: [{ sha: "d".repeat(40), message: long, author: { email: "x@y" }, ...extra }] });
   if (url.pathname.endsWith("/checks"))
     return Response.json({ checks: Array.from({ length: 40 }, () => ({ id: "c", pipelineName: "build", status: "completed", conclusion: "success", durationMs: 1200, logsUrl: "https://internal", ...extra })) });
   if (url.pathname.endsWith("/reviews"))
     return Response.json({ reviews: Array.from({ length: 30 }, (_, i) => ({ id: `v${i}`, state: "commented", body: long, commitSha: "b".repeat(40), submittedAt: "2026-09-24T00:00:00Z", reviewer: { username: "dlee", email: "d@e" }, ...extra })) });
   return new Response("not found", { status: 404 });
 };
-function commands(fetcher = hostileApi) {
+function commands(fetcher: (input: string | URL | Request, init?: RequestInit) => Promise<Response> = hostileApi) {
   const handlers = new Map<string, (args: unknown) => Promise<unknown>>();
   registerCommands({ commands: { register: (id, h) => handlers.set(id, async (a) => h(a)) }, host: signedInHost() }, fetcher);
   return handlers;
@@ -116,18 +118,41 @@ describe("panel command contracts", () => {
     expect((e2 as Error).message).toBe("[invalid_response] CV Hub returned an unexpected response");
   });
 
-  it("never returns review snapshot context or tokens from the snapshot loader to anything but Orca", async () => {
-    const snapshot = {
-      owner: "acme", repo: "demo", number: 7, repositoryId: "r", title: "T",
-      baseSha: "b".repeat(40), mergeBaseSha: "a".repeat(40), headSha: "c".repeat(40),
-      files: [{ path: "a.ts", status: "renamed", oldPath: "old.ts", additions: 1, deletions: 1, binary: false, patch: "@@ secret" }],
+  it("reports the source branch's live head, not the PR's creation-time SHA", async () => {
+    const pull = (await commands().get("cvhub.getPull")!({ owner: "acme", repo: "demo", number: 7 })) as { sourceSha: string };
+    expect(pull.sourceSha).toBe("d".repeat(40));
+  });
+
+  it("refuses to submit a review for a revision that is no longer the head", async () => {
+    const posted: string[] = [];
+    const h = commands(async (input, init) => {
+      if (init?.method === "POST") {
+        posted.push(String(init.body));
+        return Response.json({ review: { id: "v1", state: "approved" } }, { status: 201 });
+      }
+      return hostileApi(input);
+    });
+    const submit = h.get("cvhub.submitReview")!;
+    const args = { owner: "acme", repo: "demo", number: 7, state: "approved", body: "" };
+    await expect(submit({ ...args, expectedHeadSha: "a".repeat(40) })).rejects.toThrow("[stale_revision]");
+    expect(posted).toEqual([]);
+    await expect(submit({ ...args, expectedHeadSha: "d".repeat(40) })).resolves.toEqual({ id: "v1", state: "approved" });
+    expect(JSON.parse(posted[0])).toMatchObject({ state: "approved", expectedHeadSha: "d".repeat(40) });
+  });
+
+  it("builds the review from the web diff and never returns patches or tokens to anything but Orca", async () => {
+    const diff = {
+      baseSha: "b".repeat(40), headSha: "c".repeat(40), totalAdditions: 1,
+      files: [{ path: "a.ts", status: "renamed", oldPath: "old.ts", additions: 1, deletions: 1, patch: "@@ SECRET", truncated: false }],
     };
-    const h = commands(async () => Response.json({ snapshot }));
+    const h = commands(async (input) =>
+      new URL(String(input)).pathname.endsWith("/diff") ? Response.json({ diff }) : hostileApi(input),
+    );
     const review = (await h.get("cvhub.getReview")!({ owner: "acme", repo: "demo", number: 7 })) as Record<string, unknown>;
     expect(review).toEqual({
-      title: "acme/demo #7 · T",
+      title: `acme/demo #7 · ${"é".repeat(5000)}`.slice(0, 512),
       revision: "c".repeat(40),
-      context: { owner: "acme", repo: "demo", number: 7, repositoryId: "r", baseSha: "b".repeat(40), mergeBaseSha: "a".repeat(40), headSha: "c".repeat(40), connectionId: "conn-1" },
+      context: { owner: "acme", repo: "demo", number: 7, baseSha: "b".repeat(40), headSha: "c".repeat(40), connectionId: "conn-1" },
       files: [{ path: "a.ts", oldPath: "old.ts", status: "renamed", additions: 1, deletions: 1 }],
     });
     expect(JSON.stringify(review)).not.toMatch(/SECRET|patch/);

@@ -1,6 +1,26 @@
+# Validation — 2026-09-25: plugin 0.3.0 on unmodified CV Hub
+
+0.3.0 needs no CV Hub code change: the native review is built from the diff and blob endpoints CV Hub's web app uses, and sign-in uses a client registered with CV Hub's existing `register-device-agent-client.ts`. Orca [lamtuanvu/orca PR #1](https://github.com/lamtuanvu/orca/pull/1) at `75b02825` (upstream base `8d6fec59`, 1.4.197). Node 24.2.0, macOS arm64.
+
+| Check | Result |
+| --- | --- |
+| Plugin TypeScript | Passed |
+| Plugin tests | 46 passed. New or changed: native diff from `/diff` + `/blob/<headSha>` (rename original at the old path, added/deleted/binary/truncated sides, diff fetched once per revision, PR moved on → `revision_changed`, patch mismatch → error side, no leaks); `reversePatch` against 150 seeded `git diff` cases (CRLF, blank lines, empty files, missing final newlines); live head from `/commits?ref=refs/heads/<branch>`; submission refused without a request when the head moved, `expectedHeadSha` sent otherwise; verification page accepted on the API origin, the web host beside an `api.` API host, and loopback, and refused for lookalike hosts, other paths, ports or origins |
+| Reconstruction fuzz (one-off, not committed) | 1,500 random edits reversed from real `git diff` output with no mismatch |
+| Against CV Hub's own code (`getDiff` with patches, `getBlob`) on the local `devlocal/diff-demo` repository | All 10 changed files across its branch pairs rebuilt byte-for-byte to `git show <merge-base>:<path>` |
+| Plugin build + package check | Passed |
+| Electron e2e (`e2e/cv-hub-plugin.spec.ts`, fixture now serving `/diff`, `/blob` and `/commits`) on an Orca build of `75b02825` | 1 passed: sign-in → repository → PR → native diff shows original and modified text (diff and blob request URLs asserted) → unified → Approve enabled |
+
+## Limits of this round
+
+- Not run end to end against a live CV Hub with a real device-granted token after the rework; the endpoints were exercised through CV Hub's service code and the fixture only.
+- The blob endpoint's handling of unusual paths (spaces, `#`, `%`, non-ASCII) is covered by the plugin's per-segment encoding test, not against a running API.
+- Until CV Hub's review-integrity fix is deployed, a push landing between the plugin's head check and the submission can't be detected, CV Hub records reviews against the PR's creation-time commit, and merges count approvals from any commit.
+- The limits of the 2026-09-24 round on Orca's confirmation dialog and review invalidation still apply.
+
 # Validation — 2026-09-24: plugin 0.2.0 on the hardened Orca host
 
-CV Hub base `48e729b` plus the changes now in cv-hub #113 and #114 (at that time uncommitted in the cv-hub monorepo, where this plugin lived as `packages/orca-plugin`). Orca [lamtuanvu/orca PR #1](https://github.com/lamtuanvu/orca/pull/1) at `75b02825` (upstream base `8d6fec59`, 1.4.197). Node 24.2.0, macOS arm64. Electron ran with `ORCA_BACKGROUND_LAUNCH=1` and an isolated profile.
+CV Hub base `48e729b` plus native-review API changes that 0.3.0 no longer needs (at that time uncommitted in the cv-hub monorepo, where this plugin lived as `packages/orca-plugin`). Orca [lamtuanvu/orca PR #1](https://github.com/lamtuanvu/orca/pull/1) at `75b02825` (upstream base `8d6fec59`, 1.4.197). Node 24.2.0, macOS arm64. Electron ran with `ORCA_BACKGROUND_LAUNCH=1` and an isolated profile.
 
 | Check | Result |
 | --- | --- |
