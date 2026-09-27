@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { pullWebUrl } from "../shared/pull-url";
 import { Connection, type Clock } from "./connection";
 import { DiffCache, fetchDiff, readReviewFile } from "./pr-review";
 import { searchCode } from "./mcp-client";
@@ -350,6 +351,17 @@ export function registerCommands(orca: Orca, fetcher?: Fetch, clock?: Clock) {
       return { id: clip(result.review.id, 64), state: clip(result.review.state, 32) };
     },
   );
+  panel("openPullRequest", async (args: { owner: string; repo: string; number: number }) => {
+    const { connection: signedIn } = await connection.status();
+    if (!signedIn) throw new CvHubError("signed_out", "Sign in to CV Hub before opening a pull request");
+    try {
+      return z.object({ opened: z.boolean() }).parse(
+        await orca.host.call("browser.openExternal", { url: pullWebUrl(signedIn.origin, args, signedIn.webOrigin) }),
+      );
+    } catch {
+      return { opened: false };
+    }
+  });
   panel("searchCode", async (args: { owner: string; repo: string; query: string }) => {
     const client = await connection.client();
     const results = await searchCode(client, args);

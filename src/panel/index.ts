@@ -5,7 +5,8 @@ import { icon, spinner, type IconName } from "./icons";
 import { markdown } from "./markdown";
 import { watchTheme } from "./theme";
 import { DEFAULT_ORIGIN } from "../shared/contracts";
-import logoUrl from "./assets/cv-logo.png";
+import { pullWebUrl } from "../shared/pull-url";
+import logoUrl from "./assets/cv-hub-mono.svg";
 import "./style.css";
 
 // ───────────────────────── errors ─────────────────────────
@@ -32,6 +33,7 @@ function hostFailure(f: Failure): Failure {
 // ───────────────────────── schemas ─────────────────────────
 const connectionSchema = z.object({
   origin: z.string(),
+  webOrigin: z.string().nullable(),
   mcpUrl: z.string(),
   username: z.string(),
   userId: z.string(),
@@ -385,7 +387,7 @@ function accountMenu(): Child[] {
 
 // ───────────────────────── auth ─────────────────────────
 function brand() {
-  return h("div", { class: "brand" }, h("img", { class: "logo", src: logoUrl, alt: "" }), h("span", null, "CV Hub"), h("span", { class: "mut xs", style: "font-weight:400" }, "for Orca"));
+  return h("div", { class: "brand" }, h("span", { class: "logo", style: `mask-image:url('${logoUrl}');-webkit-mask-image:url('${logoUrl}')`, "aria-hidden": "true" }), h("span", null, "CV Hub"), h("span", { class: "mut xs", style: "font-weight:400" }, "for Orca"));
 }
 function authScreen() {
   const a = S.attempt;
@@ -1168,6 +1170,7 @@ function detailPane() {
   const rv = S.reviews.data.items;
   const nCh = rv.filter((r) => r.state === "changes_requested").length;
   const nAp = rv.filter((r) => r.state === "approved").length;
+  const webUrl = pullWebUrl(S.conn!.origin, { ...S.repo!, number: pull.number }, S.conn!.webOrigin);
   add(pane, 
     h(
       "div",
@@ -1181,6 +1184,37 @@ function detailPane() {
         S.checks.status === "ready" && checks.length ? h("span", { class: `pill ${nFail ? "st-closed" : nPend ? "ck-pend" : "st-open"}` }, icon(nFail ? "cancel" : nPend ? "hourglass" : "checkCircle"), nFail ? `${nFail} failing` : nPend ? `${nPend} running` : "Checks passing") : null,
       ),
       h("div", { class: "mut sm" }, [pull.author, pull.updatedAt ? ` · updated ${ago(pull.updatedAt)}` : ""]),
+      h("div", { class: "pr-link" },
+        h("span", { class: "mut xs" }, "PR on CV Hub"),
+        button({ id: "pr-url", class: "linkbtn mono xs url", title: "Open PR on CV Hub", "aria-label": `Open pull request #${pull.number} on CV Hub`, onClick: async (event: Event) => {
+          const trigger = event.currentTarget as HTMLButtonElement;
+          const ref = { ...S.repo!, number: pull.number };
+          const detailId = seq.detail;
+          trigger.disabled = true;
+          try {
+            const result = z.object({ opened: z.boolean() }).parse(await command("openPullRequest", ref));
+            if (!result.opened) throw new Error("Browser unavailable");
+            say("Opened PR on CV Hub.");
+          } catch {
+            if (seq.detail === detailId) {
+              S.notice = { kind: "warn", text: "Orca couldn’t open the browser. Use Copy PR link to open it yourself. Opening links needs the updated Orca host and browser permission." };
+              render();
+            }
+          } finally {
+            trigger.disabled = false;
+          }
+        } }, webUrl),
+        button({ class: "linkbtn", onClick: async () => {
+          try {
+            await navigator.clipboard.writeText(webUrl);
+            say("PR link copied.");
+          } catch {
+            const el = document.getElementById("pr-url");
+            if (el) getSelection()?.selectAllChildren(el);
+            say("PR link selected. Press Command-C or Control-C to copy.");
+          }
+        } }, icon("copy", "s"), "Copy PR link"),
+      ),
       h("div", { class: "br mono", "aria-label": `Merging ${pull.sourceBranch} into ${pull.targetBranch}` }, h("span", { class: "bch head", title: pull.sourceBranch }, pull.sourceBranch), icon("arrow", "s mut"), h("span", { class: "bch" }, pull.targetBranch)),
     ),
   );
@@ -1479,6 +1513,8 @@ function reviewsTab(pull: PullDetail, key: string, insp: string | undefined, hea
   return out;
 }
 function composer(pull: PullDetail, key: string, insp: string | undefined, head: string | null) {
+  const selfReview = pull.author === S.conn?.username;
+  const approvalLabel = selfReview ? "Self approve" : "Approve";
   const draft = S.drafts.get(key) ?? { kind: "commented", body: "" };
   const sub = S.submits.get(key) ?? { status: "idle" };
   const canWrite = pull.canWrite && S.conn?.canWrite === true;
@@ -1506,7 +1542,7 @@ function composer(pull: PullDetail, key: string, insp: string | undefined, head:
           "label",
           { class: `opt ${draft.kind === k ? "on" : ""}` },
           h("input", { type: "radio", name: "kind", value: k, checked: draft.kind === k, onChange: () => (S.drafts.set(key, { ...draft, kind: k }), render()) }),
-          h("span", null, h("span", { class: "b" }, label), h("span", { class: "mut xs d" }, desc)),
+          h("span", null, h("span", { class: "b" }, k === "approved" ? approvalLabel : label), h("span", { class: "mut xs d" }, k === "approved" && selfReview ? "Approve your own pull request" : desc)),
         ),
       ),
     ),
@@ -1526,7 +1562,7 @@ function composer(pull: PullDetail, key: string, insp: string | undefined, head:
   const submitBtn = button(
     { class: "btn pri", "data-fk": "submit", disabled: disabled(), "aria-busy": String(sub.status === "submitting"), "aria-describedby": "why", onClick: () => submit(key) },
     sub.status === "submitting" ? spinner() : null,
-    sub.status === "submitting" ? "Submitting…" : { commented: "Submit comment", approved: "Approve", changes_requested: "Request changes" }[draft.kind],
+    sub.status === "submitting" ? "Submitting…" : { commented: "Submit comment", approved: approvalLabel, changes_requested: "Request changes" }[draft.kind],
   );
   const ta = h("textarea", {
     id: "ta",
