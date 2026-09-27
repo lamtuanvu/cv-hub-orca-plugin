@@ -36,6 +36,7 @@ const profileSchema = z.object({
   kind: z.literal("oauth"),
   connectionId: z.string(),
   origin: z.string(),
+  webOrigin: z.string().optional(),
   mcpUrl: z.string(),
   username: z.string(),
   userId: z.string(),
@@ -178,6 +179,7 @@ export class Connection {
       connection: profile.success
         ? {
             origin: profile.data.origin,
+            webOrigin: profile.data.webOrigin ?? null,
             mcpUrl: profile.data.mcpUrl,
             username: profile.data.username,
             userId: profile.data.userId,
@@ -369,6 +371,7 @@ export class Connection {
       kind: "oauth",
       connectionId: randomUUID(),
       origin: attempt.origin,
+      ...(attempt.verifiedUrl ? { webOrigin: new URL(safeBrowserUrl(attempt.verifiedUrl)).origin } : {}),
       mcpUrl: mcpUrl.href,
       username: user.username,
       userId: user.id,

@@ -35,5 +35,6 @@ for (const provider of manifest.contributes.reviewProviders ?? []) {
     assert.equal(byId.get(id).panel, undefined, `${id} must not be panel-callable`);
   }
 }
-assert.ok(!manifest.capabilities.some((c) => c.kind === "browser:open-external"), "browser:open-external was removed from Orca");
+assert.ok(manifest.capabilities.some((c) => c.kind === "browser:open-external"), "PR links require browser:open-external");
+assert.equal(manifest.contributes.panels[0].icon, "cv-hub");
 console.log("Packaged worker activation, manifest contracts and inline panel syntax passed");

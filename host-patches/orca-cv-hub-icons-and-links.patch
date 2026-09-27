@@ -1,0 +1,539 @@
+diff --git a/docs/reference/plugin-panel-review-api.md b/docs/reference/plugin-panel-review-api.md
+index ddef68ffe3..37a4fff12a 100644
+--- a/docs/reference/plugin-panel-review-api.md
++++ b/docs/reference/plugin-panel-review-api.md
+@@ -150,8 +150,7 @@ contents through panel commands.
+ 
+ ## Worker-only browser authorization
+ 
+-Declare `{ "kind": "browser:authorize" }`. The old `browser.openExternal` method
+-and `browser:open-external` capability are removed. Panels cannot call these methods.
++Declare `{ "kind": "browser:authorize" }`. Panels cannot call these methods.
+ Workers use the existing `orca.host.call(method, params)` interface:
+ 
+ ```js
+@@ -193,3 +192,31 @@ OAuth registration, device-code requests, polling/backoff, expiry, refresh rotat
+ revocation, encrypted token storage, and authenticated REST/MCP calls belong to the
+ service integration worker/backend. The host does not need CV Hub-specific routes,
+ client secrets, or account knowledge.
++
++## Worker-only external links
++
++The curated panel icon name `cv-hub` renders the CV Hub chevron mark using the
++surrounding text color, matching the activity bar in both light and dark themes.
++
++Declare `{ "kind": "browser:open-external" }` to open ordinary web links in the
++default desktop browser. This is a separate consent grant from `browser:authorize`;
++adding it to an installed plugin requires renewed consent.
++
++```js
++const { opened } = await orca.host.call('browser.openExternal', {
++  url: 'https://hub.example.com/owner/repository/pulls/42'
++})
++```
++
++Only HTTPS and loopback HTTP URLs without credentials are accepted, with the same
++2048-character limit as authorization URLs. Other protocols and extra parameters
++are rejected. The host checks plugin identity, consent, and activation before
++opening. There is no per-link confirmation after capability consent. An absent or
++failed desktop browser opener returns `{ opened: false }`; headless and remote
++hosts do not forward this request to a connected client. A plugin can then show a
++copyable link. Invalid URLs, revoked plugins, and capability violations fail the
++host call.
++
++Panels cannot call this API directly or navigate their iframe. Expose a narrow
++panel command that resolves a resource identifier to a URL in the worker. Continue
++to use the authorization methods above for sign-in.
+diff --git a/src/main/plugins/plugin-browser-authorization.test.ts b/src/main/plugins/plugin-browser-authorization.test.ts
+index f6cb43a01a..61653ab3f2 100644
+--- a/src/main/plugins/plugin-browser-authorization.test.ts
++++ b/src/main/plugins/plugin-browser-authorization.test.ts
+@@ -35,8 +35,11 @@ const input = {
+ }
+ 
+ describe('browser authorization boundary', () => {
+-  it('removes the unrestricted browser API', () => {
+-    expect(getPluginHostMethodSpec('browser.openExternal')).toBeNull()
++  it('keeps ordinary browser links behind separate worker-only consent', () => {
++    expect(getPluginHostMethodSpec('browser.openExternal')).toMatchObject({
++      capability: 'browser:open-external',
++      panel: false
++    })
+   })
+   it('binds an attempt to its plugin and exact URL, confirms once, and rejects replay', async () => {
+     const f = fixture()
+diff --git a/src/main/plugins/plugin-browser-external.test.ts b/src/main/plugins/plugin-browser-external.test.ts
+new file mode 100644
+index 0000000000..7e7dc18dad
+--- /dev/null
++++ b/src/main/plugins/plugin-browser-external.test.ts
+@@ -0,0 +1,81 @@
++import { describe, expect, it, vi } from 'vitest'
++import { PluginExternalBrowser } from './plugin-browser-external'
++
++describe('plugin external browser', () => {
++  it.each([
++    'https://hub.example/owner/repo/pulls/42',
++    'http://localhost:5174/owner/repo/pulls/42',
++    'http://[::1]:5174/pulls/42'
++  ])('opens a permitted URL: %s', async (url) => {
++    const identity = {}
++    const open = vi.fn(async () => undefined)
++    const browser = new PluginExternalBrowser(
++      () => identity,
++      async () => open
++    )
++    expect(await browser.open('example.demo', url)).toEqual({ opened: true })
++    expect(open).toHaveBeenCalledWith(url)
++  })
++
++  it.each([
++    'file:///tmp/file',
++    'javascript:alert(1)',
++    'http://hub.example/pr',
++    'https://user:pass@hub.example/pr'
++  ])('rejects unsafe URL: %s', async (url) => {
++    const load = vi.fn()
++    const browser = new PluginExternalBrowser(() => ({}), load)
++    await expect(browser.open('example.demo', url)).rejects.toThrow()
++    expect(load).not.toHaveBeenCalled()
++  })
++
++  it.each(['revoke', 'replace', 'clear'])(
++    'does not open after %s while loading the desktop shell',
++    async (action) => {
++      let identity: object | null = {}
++      const open = vi.fn(async () => undefined)
++      const browser = new PluginExternalBrowser(
++        () => identity,
++        async () => {
++          if (action === 'clear') {
++            browser.clear()
++          } else {
++            identity = action === 'revoke' ? null : {}
++          }
++          return open
++        }
++      )
++      await expect(browser.open('example.demo', 'https://hub.example/pr')).rejects.toThrow(
++        'Plugin unavailable'
++      )
++      expect(open).not.toHaveBeenCalled()
++    }
++  )
++
++  it('refuses unavailable plugins before loading the desktop shell', async () => {
++    const load = vi.fn()
++    const browser = new PluginExternalBrowser(() => null, load)
++    await expect(browser.open('example.demo', 'https://hub.example/pr')).rejects.toThrow(
++      'Plugin unavailable'
++    )
++    expect(load).not.toHaveBeenCalled()
++  })
++
++  it('returns opened:false when the desktop shell is unavailable or fails', async () => {
++    const identity = {}
++    for (const load of [
++      async () => null,
++      async () => {
++        throw new Error('No electron')
++      },
++      async () => async () => {
++        throw new Error('No browser')
++      }
++    ]) {
++      const browser = new PluginExternalBrowser(() => identity, load)
++      expect(await browser.open('example.demo', 'https://hub.example/pr')).toEqual({
++        opened: false
++      })
++    }
++  })
++})
+diff --git a/src/main/plugins/plugin-browser-external.ts b/src/main/plugins/plugin-browser-external.ts
+new file mode 100644
+index 0000000000..54457bb2f1
+--- /dev/null
++++ b/src/main/plugins/plugin-browser-external.ts
+@@ -0,0 +1,49 @@
++import { pluginWebUrlSchema } from '../../shared/plugins/plugin-browser-contract'
++
++type Open = (url: string) => Promise<void>
++
++async function loadDesktopOpener(): Promise<Open | null> {
++  const { shell } = await import('electron')
++  return shell?.openExternal ? (url) => shell.openExternal(url) : null
++}
++
++export class PluginExternalBrowser {
++  private generation = 0
++
++  constructor(
++    private readonly resolve: (key: string) => object | null,
++    private readonly loadOpener: () => Promise<Open | null> = loadDesktopOpener
++  ) {}
++
++  async open(plugin: string, url: string): Promise<{ opened: boolean }> {
++    const target = pluginWebUrlSchema.parse(url)
++    const identity = this.resolve(plugin)
++    const generation = this.generation
++    if (!identity) {
++      throw new Error('Plugin unavailable')
++    }
++    let open: Open | null
++    try {
++      open = await this.loadOpener()
++    } catch {
++      return { opened: false }
++    }
++    // Loading Electron yields; consent or activation may have changed in the meantime.
++    if (generation !== this.generation || this.resolve(plugin) !== identity) {
++      throw new Error('Plugin unavailable')
++    }
++    if (!open) {
++      return { opened: false }
++    }
++    try {
++      await open(target)
++      return { opened: true }
++    } catch {
++      return { opened: false }
++    }
++  }
++
++  clear(): void {
++    this.generation++
++  }
++}
+diff --git a/src/main/plugins/plugin-browser-lifecycle.test.ts b/src/main/plugins/plugin-browser-lifecycle.test.ts
+index b320a44980..e5d46afb42 100644
+--- a/src/main/plugins/plugin-browser-lifecycle.test.ts
++++ b/src/main/plugins/plugin-browser-lifecycle.test.ts
+@@ -38,7 +38,7 @@ it.each(['disable-enable', 'dispose'])(
+       engines: { orca: '>=1.0.0' },
+       pluginApi: 1,
+       main: 'main.js',
+-      capabilities: [{ kind: 'browser:authorize' }]
++      capabilities: [{ kind: 'browser:authorize' }, { kind: 'browser:open-external' }]
+     })
+     await writeFile(join(root, 'orca-plugin.json'), JSON.stringify(manifest))
+     await writeFile(join(root, 'main.js'), 'export default function() {}')
+@@ -59,6 +59,19 @@ it.each(['disable-enable', 'dispose'])(
+     })
+     try {
+       await service.initialize()
++      expect(
++        await service.executeHostCall(
++          'example.demo',
++          'browser.openExternal',
++          { url: 'https://hub.example/owner/repo/pulls/42' },
++          { viaPanel: false }
++        )
++      ).toEqual({ ok: true, value: { opened: true } })
++      expect(electron.open).toHaveBeenCalledExactlyOnceWith(
++        'https://hub.example/owner/repo/pulls/42'
++      )
++      expect(electron.confirm).not.toHaveBeenCalled()
++      electron.open.mockClear()
+       const created = await service.executeHostCall(
+         'example.demo',
+         'browser.createAuthorization',
+diff --git a/src/main/plugins/plugin-host-conformance.test.ts b/src/main/plugins/plugin-host-conformance.test.ts
+index b9be4aea6d..3b538ed0c1 100644
+--- a/src/main/plugins/plugin-host-conformance.test.ts
++++ b/src/main/plugins/plugin-host-conformance.test.ts
+@@ -32,6 +32,7 @@ function createServices(): PluginHostServices {
+       attemptId: '00000000-0000-4000-8000-000000000001',
+       expiresAt: 1000
+     }),
++    openExternal: async () => ({ opened: true }),
+     openAuthorization: async () => ({ opened: true }),
+     cancelAuthorization: () => ({ ok: true }),
+     openReview: async () => ({
+@@ -123,6 +124,7 @@ const successParams: Record<string, unknown> = {
+     verificationUrl: 'https://hub.example/device',
+     expiresIn: 30
+   },
++  'browser.openExternal': { url: 'https://hub.example/owner/repo/pulls/42' },
+   'browser.openAuthorization': { attemptId: '00000000-0000-4000-8000-000000000001' },
+   'browser.cancelAuthorization': { attemptId: '00000000-0000-4000-8000-000000000001' },
+   'workspace.readContext': {},
+@@ -162,6 +164,46 @@ describe('plugin host main/relay conformance', () => {
+     }
+   })
+ 
++  it('gates external links by worker identity and separate consent on both transports', async () => {
++    for (const [capabilities, viaPanel, expected] of [
++      [[], false, false],
++      [['browser:authorize'], false, false],
++      [['browser:open-external'], true, false],
++      [['browser:open-external'], false, true]
++    ] as const) {
++      const services = createServices()
++      services.openExternal = vi.fn(async () => ({ opened: true }))
++      const resolvePolicy = () => createPolicy(capabilities, services)
++      for (const adapter of Object.values(createAdapters(resolvePolicy))) {
++        const result = await adapter(
++          { method: 'browser.openExternal', params: { url: 'https://hub.example/pr' } },
++          viaPanel
++        )
++        expect(result.ok).toBe(expected)
++      }
++      if (expected) {
++        expect(services.openExternal).toHaveBeenCalledWith(PLUGIN_KEY, 'https://hub.example/pr')
++      } else {
++        expect(services.openExternal).not.toHaveBeenCalled()
++      }
++    }
++  })
++
++  it('reports unsupported external browser opening without an exception', async () => {
++    const services = createServices()
++    delete services.openExternal
++    for (const adapter of Object.values(
++      createAdapters(() => createPolicy(['browser:open-external'], services))
++    )) {
++      expect(
++        await adapter(
++          { method: 'browser.openExternal', params: { url: 'https://hub.example/pr' } },
++          false
++        )
++      ).toEqual({ ok: true, value: { opened: false } })
++    }
++  })
++
+   it('projects workspace context without host paths on main and relay', async () => {
+     const resolvePolicy = vi.fn().mockResolvedValue(createPolicy(['workspace:read']))
+     for (const adapter of Object.values(createAdapters(resolvePolicy))) {
+diff --git a/src/main/plugins/plugin-host-method-bindings.ts b/src/main/plugins/plugin-host-method-bindings.ts
+index 91c698ffa3..2f8219eb74 100644
+--- a/src/main/plugins/plugin-host-method-bindings.ts
++++ b/src/main/plugins/plugin-host-method-bindings.ts
+@@ -1,5 +1,6 @@
+ import {
+   pluginCreateAuthorizationSchema,
++  pluginOpenExternalSchema,
+   pluginAuthorizationHandleSchema,
+   type PluginCreateAuthorization
+ } from '../../shared/plugins/plugin-browser-contract'
+@@ -37,6 +38,7 @@ export type PluginHostServices = {
+     pluginId: string,
+     input: PluginCreateAuthorization
+   ): { attemptId: string; expiresAt: number }
++  openExternal?(pluginId: string, url: string): Promise<{ opened: boolean }>
+   openAuthorization?(pluginId: string, attemptId: string): Promise<{ opened: boolean }>
+   cancelAuthorization?(pluginId: string, attemptId: string): { ok: true }
+   resolveActiveWorktreeContext(): Promise<PluginWorktreeContext | null>
+@@ -104,6 +106,10 @@ const HANDLERS = new Map<string, BoundPluginHostMethod>([
+     }
+     return services.openReview(pluginId, pluginOpenReviewSchema.parse(params))
+   }),
++  definePluginMethod('browser.openExternal', async (params, { pluginId, services }) => {
++    const { url } = pluginOpenExternalSchema.parse(params)
++    return services.openExternal?.(pluginId, url) ?? { opened: false }
++  }),
+   definePluginMethod('browser.createAuthorization', async (params, { pluginId, services }) => {
+     if (!services.createAuthorization) {
+       throw new Error('Browser authorization unavailable')
+diff --git a/src/main/plugins/plugin-review-host.ts b/src/main/plugins/plugin-review-host.ts
+index c640111a6d..e3cc7c78da 100644
+--- a/src/main/plugins/plugin-review-host.ts
++++ b/src/main/plugins/plugin-review-host.ts
+@@ -1,3 +1,4 @@
++import type { PluginExternalBrowser } from './plugin-browser-external'
+ import type { PluginBrowserAuthorizations } from './plugin-browser-authorization'
+ import { compilePluginDataSchema } from '../../shared/plugins/plugin-data-schema'
+ import type { ValidDiscoveredPlugin } from './plugin-discovery'
+@@ -46,6 +47,7 @@ type Services = {
+   eventBus: PluginEventBus
+   capabilities(key: string): PluginCapabilityKind[] | null
+   panelInvoke: Invoke
++  externalBrowser: PluginExternalBrowser
+   browser: PluginBrowserAuthorizations
+   reviews: PluginReviewSessions
+   audit: PluginHostCallPolicy['audit']
+@@ -77,6 +79,9 @@ export function executeServiceHostCall(
+               options.viaPanel && owner?.startsWith('renderer:')
+                 ? (key, args) => input.reviews.open(owner, key, args)
+                 : undefined,
++            openExternal: options.viaPanel
++              ? undefined
++              : (key, url) => input.externalBrowser.open(key, url),
+             createAuthorization: options.viaPanel
+               ? undefined
+               : (key, args) => input.browser.create(key, args),
+diff --git a/src/main/plugins/plugin-review-integration.ts b/src/main/plugins/plugin-review-integration.ts
+index 229db13073..0165837dd5 100644
+--- a/src/main/plugins/plugin-review-integration.ts
++++ b/src/main/plugins/plugin-review-integration.ts
+@@ -1,3 +1,4 @@
++import { PluginExternalBrowser } from './plugin-browser-external'
+ import type { ValidDiscoveredPlugin } from './plugin-discovery'
+ import { createPluginReviewSessions } from './plugin-review-host'
+ import { createPluginBrowserAuthorizations } from './plugin-browser-host'
+@@ -16,7 +17,11 @@ export function createPluginReviewIntegration(
+   const browser = createPluginBrowserAuthorizations((key) =>
+     withCapability(key, 'browser:authorize')
+   )
++  const externalBrowser = new PluginExternalBrowser((key) =>
++    withCapability(key, 'browser:open-external')
++  )
+   return {
++    externalBrowser,
+     reviews,
+     browser,
+     panelInvoke: async (key: string, command: string, args: unknown) => {
+@@ -33,6 +38,7 @@ export function createPluginReviewIntegration(
+       return result
+     },
+     clear: () => {
++      externalBrowser.clear()
+       browser.clear()
+       reviews.clear()
+     }
+diff --git a/src/renderer/src/components/right-sidebar/cv-hub-icon.tsx b/src/renderer/src/components/right-sidebar/cv-hub-icon.tsx
+new file mode 100644
+index 0000000000..93b86f1487
+--- /dev/null
++++ b/src/renderer/src/components/right-sidebar/cv-hub-icon.tsx
+@@ -0,0 +1,19 @@
++// Adapted from cv-hub/apps/web/public/branding/controlvector/logo.png.
++export function CvHubIcon({ size = 24, className }: { size?: number; className?: string }) {
++  return (
++    <svg
++      width={size}
++      height={size}
++      viewBox="0 0 204 189"
++      fill="currentColor"
++      className={className}
++      aria-hidden="true"
++      focusable="false"
++    >
++      <path d="M94 13C100 6 109 8 114 15C118 21 115 28 111 32L50 93L111 155C117 161 118 169 112 175C107 181 100 182 94 176L13 94Z" />
++      <path d="M123 42C129 36 138 36 143 42C148 48 146 56 141 61L108 93L140 126C146 132 147 139 141 145C135 151 129 150 123 144L71 94Z" />
++      <path d="M149 71C155 65 163 66 168 71C173 77 170 83 165 88L160 93L166 99C172 105 171 111 165 116C159 121 151 118 146 113L127 94Z" />
++      <circle cx="178.5" cy="93.5" r="6.5" />
++    </svg>
++  )
++}
+diff --git a/src/renderer/src/components/right-sidebar/plugin-panel-activity-items.ts b/src/renderer/src/components/right-sidebar/plugin-panel-activity-items.ts
+index 0a5cffa4e4..6f2c4bc180 100644
+--- a/src/renderer/src/components/right-sidebar/plugin-panel-activity-items.ts
++++ b/src/renderer/src/components/right-sidebar/plugin-panel-activity-items.ts
+@@ -29,6 +29,7 @@ import {
+ } from 'lucide-react'
+ import type { ActivePluginPanel } from '@/store/plugin-panels'
+ import type { ActivityBarItem } from './activity-bar-buttons'
++import { CvHubIcon } from './cv-hub-icon'
+ 
+ type PluginPanelIcon = ActivityBarItem['icon']
+ 
+@@ -45,6 +46,7 @@ const PLUGIN_PANEL_ICONS: Record<string, PluginPanelIcon> = {
+   calendar: Calendar,
+   cloud: Cloud,
+   code: Code,
++  cvhub: CvHubIcon,
+   database: Database,
+   filetext: FileText,
+   flag: Flag,
+diff --git a/src/shared/plugins/plugin-browser-contract.test.ts b/src/shared/plugins/plugin-browser-contract.test.ts
+index 747649bce4..e92cdafd01 100644
+--- a/src/shared/plugins/plugin-browser-contract.test.ts
++++ b/src/shared/plugins/plugin-browser-contract.test.ts
+@@ -1,6 +1,7 @@
+ import { describe, expect, it } from 'vitest'
+ import {
+   pluginWebUrlSchema,
++  pluginOpenExternalSchema,
+   pluginAuthorizationHandleSchema,
+   pluginCreateAuthorizationSchema
+ } from './plugin-browser-contract'
+@@ -52,3 +53,26 @@ describe('browser authorization contract', () => {
+     ).toBe(false)
+   })
+ })
++
++describe('external browser contract', () => {
++  it('requires a separate capability and excludes panels', () => {
++    expect(getPluginHostMethodSpec('browser.openExternal')).toMatchObject({
++      capability: 'browser:open-external',
++      panel: false,
++      mutation: true
++    })
++  })
++
++  it('accepts only a URL with no caller-selected authority or shell options', () => {
++    expect(pluginOpenExternalSchema.safeParse({ url: 'https://hub.example/pr' }).success).toBe(true)
++    for (const params of [
++      { url: 'https://hub.example/pr', pluginId: 'other.plugin' },
++      { url: 'https://hub.example/pr', activate: true },
++      { url: 'http://hub.example/pr' },
++      { url: 'https://user@hub.example/pr' },
++      { url: 'data:text/html,hello' }
++    ]) {
++      expect(pluginOpenExternalSchema.safeParse(params).success).toBe(false)
++    }
++  })
++})
+diff --git a/src/shared/plugins/plugin-browser-contract.ts b/src/shared/plugins/plugin-browser-contract.ts
+index ae22448220..370360dd7f 100644
+--- a/src/shared/plugins/plugin-browser-contract.ts
++++ b/src/shared/plugins/plugin-browser-contract.ts
+@@ -38,3 +38,6 @@ export const pluginCreatedAuthorizationSchema = pluginAuthorizationHandleSchema
+ export const pluginOpenedAuthorizationSchema = z.object({ opened: z.boolean() }).strict()
+ export const pluginCanceledAuthorizationSchema = z.object({ ok: z.literal(true) }).strict()
+ export type PluginCreateAuthorization = z.infer<typeof pluginCreateAuthorizationSchema>
++
++export const pluginOpenExternalSchema = z.object({ url: pluginWebUrlSchema }).strict()
++export const pluginOpenedExternalSchema = z.object({ opened: z.boolean() }).strict()
+diff --git a/src/shared/plugins/plugin-capabilities.ts b/src/shared/plugins/plugin-capabilities.ts
+index f52e277563..5cf55f9788 100644
+--- a/src/shared/plugins/plugin-capabilities.ts
++++ b/src/shared/plugins/plugin-capabilities.ts
+@@ -16,6 +16,7 @@ export const PLUGIN_CAPABILITY_KINDS = [
+   'commands:invoke-own',
+   'diffs:open',
+   'browser:authorize',
++  'browser:open-external',
+   'workspace:read',
+   'terminal:send',
+   'notifications:show',
+@@ -40,6 +41,7 @@ export const PLUGIN_CAPABILITY_DESCRIPTIONS: Record<PluginCapabilityKind, string
+   'diffs:open': 'Open read-only native reviews supplied by this plugin',
+   'browser:authorize':
+     'Request browser sign-in after confirmation in Orca (HTTPS, or loopback development)',
++  'browser:open-external': 'Open HTTPS links (or loopback HTTP) in your default browser',
+   'workspace:read':
+     'Read the name, branch, git remotes, and terminal list of your focused worktree',
+   'terminal:send': 'Type text into a terminal you can see (always a specific terminal)',
+diff --git a/src/shared/plugins/plugin-host-api.ts b/src/shared/plugins/plugin-host-api.ts
+index 7234baa8c2..3a3558b740 100644
+--- a/src/shared/plugins/plugin-host-api.ts
++++ b/src/shared/plugins/plugin-host-api.ts
+@@ -3,7 +3,9 @@ import {
+   pluginAuthorizationHandleSchema,
+   pluginCreatedAuthorizationSchema,
+   pluginOpenedAuthorizationSchema,
+-  pluginCanceledAuthorizationSchema
++  pluginCanceledAuthorizationSchema,
++  pluginOpenExternalSchema,
++  pluginOpenedExternalSchema
+ } from './plugin-browser-contract'
+ import { z } from 'zod'
+ import {
+@@ -136,6 +138,16 @@ export const PLUGIN_HOST_API_V0: readonly PluginHostMethodSpec[] = [
+     params: pluginOpenReviewSchema,
+     result: pluginOpenedReviewSchema
+   }),
++  spec({
++    name: 'browser.openExternal',
++    since: '1.2',
++    scope: 'desktop',
++    capability: 'browser:open-external',
++    mutation: true,
++    panel: false,
++    params: pluginOpenExternalSchema,
++    result: pluginOpenedExternalSchema
++  }),
+   spec({
+     name: 'browser.createAuthorization',
+     since: '1.2',

@@ -3,10 +3,10 @@
   "id": "cv-hub",
   "publisher": "controlvector",
   "name": "CV Hub",
-  "version": "0.3.0",
-  "description": "Review CV Hub pull requests in Orca's native diff viewer, check CI and reviews, and search code through MCP. Signs in with CV Hub OAuth in your browser. Requires Orca with the native plugin review host (lamtuanvu/orca 75b02825).",
+  "version": "0.4.0",
+  "description": "Review CV Hub pull requests in Orca's native diff viewer, open PRs in your browser, and search code through MCP. Requires the CV Hub icon and browser-link patch in the lamtuanvu/orca fork.",
   "engines": {
-    "orca": ">=1.4.197"
+    "orca": ">=1.4.214"
   },
   "pluginApi": 1,
   "main": "main.mjs",
@@ -15,7 +15,7 @@
       {
         "id": "cv-hub",
         "title": "CV Hub",
-        "icon": "git-pull-request",
+        "icon": "cv-hub",
         "entry": "panel.html"
       }
     ],
@@ -40,6 +40,11 @@
                   "origin": {
                     "type": "string",
                     "maxLength": 2048
+                  },
+                  "webOrigin": {
+                    "type": "string",
+                    "maxLength": 2048,
+                    "nullable": true
                   },
                   "mcpUrl": {
                     "type": "string",
@@ -67,6 +72,7 @@
                 },
                 "required": [
                   "origin",
+                  "webOrigin",
                   "mcpUrl",
                   "username",
                   "userId",
@@ -303,6 +309,11 @@
                     "type": "string",
                     "maxLength": 2048
                   },
+                  "webOrigin": {
+                    "type": "string",
+                    "maxLength": 2048,
+                    "nullable": true
+                  },
                   "mcpUrl": {
                     "type": "string",
                     "maxLength": 2048
@@ -329,6 +340,7 @@
                 },
                 "required": [
                   "origin",
+                  "webOrigin",
                   "mcpUrl",
                   "username",
                   "userId",
@@ -794,6 +806,50 @@
         }
       },
       {
+        "id": "cvhub.openPullRequest",
+        "title": "CV Hub: Open pull request in browser",
+        "panel": {
+          "effect": "write",
+          "input": {
+            "type": "object",
+            "properties": {
+              "owner": {
+                "type": "string",
+                "maxLength": 256,
+                "minLength": 1
+              },
+              "repo": {
+                "type": "string",
+                "maxLength": 256,
+                "minLength": 1
+              },
+              "number": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "owner",
+              "repo",
+              "number"
+            ],
+            "additionalProperties": false
+          },
+          "output": {
+            "type": "object",
+            "properties": {
+              "opened": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "opened"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
         "id": "cvhub.getPullChecks",
         "title": "CV Hub: Pull request checks",
         "panel": {
@@ -1168,6 +1224,9 @@
     },
     {
       "kind": "browser:authorize"
+    },
+    {
+      "kind": "browser:open-external"
     }
   ]
 }

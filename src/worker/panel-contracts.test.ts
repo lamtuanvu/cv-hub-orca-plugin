@@ -54,6 +54,27 @@ function commands(fetcher: (input: string | URL | Request, init?: RequestInit) =
 }
 
 describe("panel command contracts", () => {
+  it("opens only a PR URL derived from the signed-in server", async () => {
+    const host = signedInHost();
+    const opened: unknown[] = [];
+    const handlers = new Map<string, (args: unknown) => unknown>();
+    registerCommands({
+      commands: { register: (id, handler) => handlers.set(id, handler) },
+      host: { call: async (method, args) => {
+        if (method === "browser.openExternal") {
+          opened.push(args);
+          return { opened: true };
+        }
+        return host.call(method, args);
+      } },
+    }, hostileApi);
+    const open = handlers.get("cvhub.openPullRequest")!;
+    await expect(open({ owner: "acme", repo: "demo", number: 7 })).resolves.toEqual({ opened: true });
+    expect(opened).toEqual([{ url: "https://hub.example/dashboard/repositories/acme/demo/pulls/7" }]);
+    await expect(open({ owner: "acme", repo: "demo", number: 7, url: "https://untrusted.example" })).rejects.toThrow();
+    expect(opened).toHaveLength(1);
+  });
+
   it("compile under Orca's bounded schema dialect", () => {
     for (const [id, c] of Object.entries(PANEL_COMMANDS)) {
       expect(() => compileDataSchema(c.input), `${id} input`).not.toThrow();
@@ -64,13 +85,18 @@ describe("panel command contracts", () => {
     expect(() => compileDataSchema({ type: "string", pattern: "x" })).toThrow(); // unsupported keyword
   });
 
+  it("keeps the copy-link fallback usable when the host cannot open a browser", async () => {
+    await expect(commands().get("cvhub.openPullRequest")!({ owner: "acme", repo: "demo", number: 7 }))
+      .resolves.toEqual({ opened: false });
+  });
+
   it("declare loaders privately and the review provider exactly as Orca requires", () => {
     const manifest = buildManifest();
     const byId = new Map(manifest.contributes.commands.map((c) => [c.id, c]));
     for (const id of Object.keys(PRIVATE_COMMANDS)) expect(byId.get(id)).not.toHaveProperty("panel");
     expect(manifest.contributes.reviewProviders).toEqual([REVIEW_PROVIDER]);
     expect(manifest.capabilities.map((c) => c.kind).sort()).toEqual(
-      ["browser:authorize", "commands:invoke-own", "diffs:open", "secrets", "storage"],
+      ["browser:authorize", "browser:open-external", "commands:invoke-own", "diffs:open", "secrets", "storage"],
     );
     // Nothing panel-callable can load review snapshots or file contents.
     expect(Object.keys(PANEL_COMMANDS).filter((id) => /review(File)?$|getReview/.test(id) && id !== "cvhub.listReviews" && id !== "cvhub.submitReview")).toEqual([]);

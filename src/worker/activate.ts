@@ -6,6 +6,7 @@ import { pullInput, pullPath, type Orca } from "../shared/contracts";
 import { PANEL_COMMANDS, PAGE_SIZE, PRIVATE_COMMANDS } from "../shared/panel-contracts";
 import { PANEL_PAYLOAD_LIMIT, byteLength, compileDataSchema } from "../shared/panel-schema";
 import { CvHubError, type Fetch } from "./rest-client";
+import { pullWebUrl } from "../shared/pull-url";
 
 const clip = (value: string | null | undefined, max: number) => (value ?? "").slice(0, max);
 const nullableClip = (value: string | null | undefined, max: number) => (value == null ? null : value.slice(0, max));
@@ -242,6 +243,17 @@ export function registerCommands(orca: Orca, fetcher?: Fetch, clock?: Clock) {
       return { id: clip(result.review.id, 64), state: clip(result.review.state, 32) };
     },
   );
+  panel("openPullRequest", async (args: { owner: string; repo: string; number: number }) => {
+    const { connection: signedIn } = await connection.status();
+    if (!signedIn) throw new CvHubError("signed_out", "Sign in to CV Hub before opening a pull request");
+    try {
+      return z.object({ opened: z.boolean() }).parse(
+        await orca.host.call("browser.openExternal", { url: pullWebUrl(signedIn.origin, args, signedIn.webOrigin) }),
+      );
+    } catch {
+      return { opened: false };
+    }
+  });
   panel("searchCode", async (args: { owner: string; repo: string; query: string }) => {
     const client = await connection.client();
     const results = await searchCode(client, args);

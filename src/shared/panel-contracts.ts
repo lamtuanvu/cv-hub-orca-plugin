@@ -17,6 +17,7 @@ export const BROWSER_STATES = ["idle", "confirming", "opened", "declined", "unav
 
 const connection = obj({
   origin: str(2048),
+  webOrigin: nullable(str(2048)),
   mcpUrl: str(2048),
   username: str(256),
   userId: str(256),
@@ -108,6 +109,12 @@ export const PANEL_COMMANDS: Record<string, PanelContract> = {
       updatedAt: nullable(str(64)),
       canWrite: bool(),
     }),
+  },
+  "cvhub.openPullRequest": {
+    title: "CV Hub: Open pull request in browser",
+    effect: "write",
+    input: obj({ owner, repo, number }),
+    output: obj({ opened: bool() }),
   },
   "cvhub.getPullChecks": {
     title: "CV Hub: Pull request checks",
