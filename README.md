@@ -1,0 +1,112 @@
+# CV Hub for Orca
+
+Desktop plugin for CV Hub hosted Git repositories. Sign in with CV Hub in your browser, browse repositories and pull requests, open their changes in **Orca's native Monaco DiffViewer**, inspect CI checks and review history, submit a top-level review, and search code through CV Hub's Streamable HTTP MCP server.
+
+**Requires the [lamtuanvu/orca](https://github.com/lamtuanvu/orca) build of Orca (`main`, at or after `d3975767`), which carries the hardened native plugin review host ([contract](https://github.com/lamtuanvu/orca/blob/main/docs/reference/plugin-panel-review-api.md)), zip installs, in-place updates and marketplace repositories. Nothing extra is needed on the CV Hub side: the plugin signs in with the OAuth client every CV Hub deployment already has, and uses the same API as CV Hub's web app. Stock Orca cannot load this plugin.** Orca 1.4.197 is the research base, not a claim of compatibility with its unpatched release. Nothing here installs over your existing Orca app or registers MCP with your coding agent automatically.
+
+## Build and install
+
+This repository holds the plugin only; the server side lives in [controlvector/cv-hub](https://hub.controlvector.io/controlvector/cv-hub). Design notes and the original implementation plan are in [`docs/design/`](docs/design/).
+
+1. Nothing to set up on CV Hub. The plugin signs in as `cv-git-cli`, the public device-flow client CV Hub ships in every deployment for its own CLI tools (migration `0017_cv_git_oauth_client.sql`). Check a server with `GET <api-origin>/oauth/client-info/cv-git-cli`.
+
+   What that means:
+   - The plugin requests only `profile repo:read repo:write offline_access`, not the client's full scope set (which includes `repo:admin`).
+   - The client is first-party, so CV Hub's approval page asks you to confirm the code but shows no separate consent screen.
+   - In CV Hub's Authorized apps and audit logs, the plugin appears as the cv-git CLI. Revoking that app there signs out cv-git as well as Orca; to sign out only Orca, use **Sign out** in the plugin, which revokes its own tokens.
+2. In this repository, run:
+
+   ```sh
+   pnpm install --frozen-lockfile
+   pnpm run package
+   ```
+
+   This builds `dist/`, checks it, and writes `dist/controlvector.cv-hub-<version>.zip`: `orca-plugin.json`, `main.mjs` and `panel.html` at the top level, nothing else. Orca runs no build, so the zip is the install. Released builds are also on the [releases page](https://github.com/lamtuanvu/cv-hub-orca-plugin/releases).
+
+3. Get the Orca host: check out `main` from `https://github.com/lamtuanvu/orca` (its CI can also build unsigned macOS DMGs). The bundled patch below reproduces only the older review host (`8d6fec59..75b02825`), without zip installs, updates, marketplaces, or the worktree remotes 0.4.0 uses to preselect a repository:
+
+   ```sh
+   git clone https://github.com/stablyai/orca.git /tmp/orca-cv-hub
+   git -C /tmp/orca-cv-hub checkout 8d6fec597bfae3f1e1bf961a6cae2837f925a3b2
+   node scripts/apply-host-patch.mjs /tmp/orca-cv-hub
+   ```
+
+   Follow that checkout's prerequisites and build instructions (`pnpm install`, `pnpm run build:desktop`). For an interactive launch, use the command below from the Orca checkout. `ORCA_DEV_USER_DATA_PATH` selects a development profile; do not use `ORCA_E2E_USER_DATA_DIR`, which requires the test harness's disposable-home setup. The host patch is pinned to the commit in [host-patches/base.json](host-patches/base.json); rebasing onto other versions needs review.
+
+   ```sh
+   env -u NODE_OPTIONS -u ELECTRON_RUN_AS_NODE -u ORCA_BACKGROUND_LAUNCH \
+     -u ORCA_E2E_USER_DATA_DIR -u ORCA_E2E_HOME_DIR \
+     NODE_ENV=development \
+     ORCA_DEV_USER_DATA_PATH=/tmp/orca-cv-hub-profile \
+     node node_modules/electron/cli.js .
+   ```
+
+4. In Orca, enable the plugin system in Settings → Plugins and install CV Hub one of three ways, then review and enable it:
+   - **Marketplace** (recommended, surfaces updates): in the Marketplace tab choose **Manage sources**, add `lamtuanvu/cv-hub-orca-plugin`, and install **CV Hub**. This repository's [`orca-marketplace.json`](orca-marketplace.json) pins the listing to the built `plugin-v<version>` tag, so when a new version is released the card shows **Update available**.
+   - **Zip file**: **Install plugin → Zip file**, and choose `dist/controlvector.cv-hub-<version>.zip` or a release zip.
+   - **Git URL**: `https://github.com/lamtuanvu/cv-hub-orca-plugin.git` with ref `dist` (latest release) or `plugin-v<version>`. Don't use `main`: it holds sources, not the built plugin.
+   - For development, **Local folder** with the absolute path to this repository's `dist/`.
+
+   To upgrade, use **Update…** on the installed plugin (pick a newer zip, folder or ref) or **Update from marketplace**. The update is installed in place: the sign-in, saved server and last repository live in Orca's plugin storage and secrets, which are kept, and **Roll back** returns to the previous version. A release that only changes the version stays enabled; one that adds permissions waits for you to approve again.
+
+   **Upgrading from 0.3.x requires re-approval once**: 0.4.0 adds `workspace:read` to preselect the CV Hub repository of the focused worktree.
+   **Upgrading from 0.2.x** keeps the same capabilities, so Orca doesn't ask for new permissions; reopen any review left open from 0.2.x. **Upgrading from 0.1.x requires re-approval.** 0.2.0 declares new capabilities (`browser:authorize`, panel command contracts, the `cvhub.pullRequest` review provider) and drops the PAT flow, so Orca's consent fingerprint changes: review and enable the plugin again in Settings → Plugins. A saved PAT from 0.1.x is deleted after the first OAuth sign-in or sign-out.
+5. Open **CV Hub** in the right sidebar. The server defaults to CV Hub at `https://api.hub.controlvector.io`; for a self-hosted or local server, open **Connection settings** and enter its **API origin** (not its frontend URL or an `/api` path; locally `http://localhost:3001`). The plugin remembers the server you last signed in to. HTTPS is required except for loopback development servers. Choose **Sign in with CV Hub**, then **Continue in browser** and approve the code on CV Hub's `/device` page. Approving read-only still allows browsing; publishing reviews needs `repo:write` and repository write access.
+6. Choose a repository and PR, then **Open changes in Orca**. Close the native review dialog to submit feedback from the sidebar.
+
+![Native CV Hub diff in Orca](docs/native-review.png)
+
+## What the native review does
+
+The review is built from the two endpoints CV Hub's own pull-request page uses. `GET .../pulls/:number/diff` fixes the revision: the target tip and source head SHAs, the changed files, and each file's patch (hunks relative to the merge base, which is what `base...head` diffs against). For each file Orca asks for, the worker loads the new side from `GET /api/v1/repos/:owner/:repo/blob/<headSha>/<path>` and rebuilds the old side by undoing that file's patch, which gives the merge-base version even after the target branch has moved on. Renames and copies, additions, deletions, empty files and missing final newlines are handled; the reconstruction is checked against git's own diffs in the tests. If a patch doesn't match the file, that file shows an error, never a guessed or empty original.
+
+The diff is cached in the worker per review revision; after a worker restart it is refetched, and if the PR has moved on since the review opened, its files report that the pull request changed. Files whose patch CV Hub truncates (over 256 KiB, or past its 4 MiB total) show the new side with the old side marked as too large.
+
+Orca owns the file navigation and read-only DiffViewer, with side-by-side/unified modes and model cleanup. Provider context and file contents stay out of the sandboxed iframe. Binary/non-UTF-8 files and files above 2 MiB are shown as explicit unsupported/limited states. Snapshot metadata is limited to 2,000 files / 1 MiB. File contents load lazily, one file at a time; only the diff is cached.
+
+This version uses a native **dialog with one selected file**, not a central editor tab or combined scrolling diff. It does not stage, edit, merge, check out branches, or create inline threads. GitHub-mirrored repositories, Orca remote/web clients, and inline comments are outside this version.
+
+## Reviews and authentication
+
+Sign-in is the OAuth 2.0 device authorization grant (RFC 8628) with CV Hub's public CLI client `cv-git-cli`. The worker requests the code, polls `/oauth/token` (honoring `interval`, `slow_down`, expiry, denial, and a bounded offline backoff), and verifies identity (`/api/auth/me`) and MCP discovery with the new token before declaring the connection complete. The device code, access token and refresh token never reach the panel: the panel sees an opaque attempt ID, the user code, the verification address, and the account profile. Tokens live only in Orca's encrypted secret store; profile metadata uses private plugin storage.
+
+The worker validates the verification address before offering to open it: it must be CV Hub's `/device` page on the API origin, or on the web host beside an `api.` API host (API `https://api.hub.example.com` → page `https://hub.example.com/device`), which is how CV Hub is deployed. A loopback API accepts a loopback page on any port, for local development. It then registers the URL with Orca (`browser.createAuthorization`, remaining lifetime capped at 900 s) and asks Orca to open it (`browser.openAuthorization`), which shows a native confirmation naming the server and destination. The panel command returns immediately; the confirmation outcome arrives through status polling, and each handle is cancelled after use, on completion, denial, failure or cancellation. Orca's handles never reach the panel. When Orca can't open the browser — declined, rate limited (one request per ten seconds), reset by a plugin refresh, missing host support, or an address the worker couldn't verify — the panel says why and always shows the user code and a copyable verification address. **Copy code**/**Copy address** use the clipboard when the sandbox allows it and otherwise select the text for ⌘C/Ctrl+C.
+
+Refreshes are serialized and the rotated refresh token is persisted before use. A rejected refresh marks the session expired (**Sign in again**) without discarding repository selection or drafts for that account. A 401 on a read refreshes once and retries; writes are never replayed. Sign-out cancels any pending attempt, deletes local credentials first, then revokes the refresh and access tokens on the server and reports a failed revocation separately. Profiles saved by the earlier PAT version are shown a **Sign in again** prompt; the PAT is deleted after OAuth sign-in or sign-out and is never used as an OAuth token. Connections reject redirects and cross-origin MCP discovery. A new sign-in invalidates old native-review contexts. Authorization attempts live in the worker: reloading the panel resumes a pending attempt, but a worker restart ends it and the user starts again.
+
+The panel compares the revision you inspected with the source branch's live head (`GET /api/v1/repos/:owner/:repo/commits?ref=refs/heads/<branch>&limit=1`), not the PR's `sourceSha` field, which older CV Hub versions set only when the PR is created and newer ones update after a push lands. Before submitting, the worker checks the head again and refuses a review of a revision that is no longer current. The submission also carries `expectedHeadSha`. CV Hub versions without the review-integrity fix ignore that field, so a push landing between the check and the submission can't be caught, and those versions record every review against the PR's creation-time commit and count approvals from any commit. Once the fix is deployed, CV Hub rejects a stale submission with 409 and counts approvals only for the commit being merged. Write requests are never automatically retried; after an uncertain result the panel requires reloading the review history, and only allows a retry once it confirms the review is absent. Feedback drafts are kept in the panel's memory, keyed by server, account, repository and PR; they are cleared on sign-out.
+
+MCP code search discovers `search_code` on the authenticated `/mcp` endpoint; it returns up to eight bounded snippets. The panel displays the endpoint for separate coding-agent setup. Plugin installation does not add agent tools or skills.
+
+## Orca host contract
+
+The plugin targets the hardened host contract at `75b02825`:
+
+- **Explicit panel commands** (`commands:invoke-own`). Only commands with a `panel` contract in `orca-plugin.json` are callable from the iframe, each with a bounded input/output schema that Orca validates before running the command and before replying. The contracts live in `src/shared/panel-contracts.ts`; the build writes them into the manifest, and the worker checks its own view models against them too. Exposed: sign-in status/start/cancel/continue, sign-out, paginated repositories and pull requests, PR details, checks, reviews, review submission, code search. Nothing generic (no fetch, URLs, methods or tokens) is exposed.
+- **Native review provider** (`diffs:open`). `contributes.reviewProviders` declares `cvhub.pullRequest` → snapshot `cvhub.getReview`, content `cvhub.readReviewFile`; both loaders are worker-only commands without panel contracts. The panel calls `diffs.openReview({ providerId: "cvhub.pullRequest", args: { owner, repo, number } })` and receives only `{ reviewId, revision }`. Failed file reads return an `error` side for that file.
+- **Worker-only browser authorization** (`browser:authorize`), described above. `browser.openExternal` no longer exists.
+
+Refreshing, updating or disabling the plugin invalidates open reviews and pending browser handles; the panel asks you to reopen the review or start sign-in again. A worker restart ends a pending sign-in. The worker remains subject to Orca's trusted-plugin model: approving it grants native code execution; these capabilities describe what the panel may ask the host to do, not a Node sandbox.
+
+## Verification
+
+```sh
+pnpm type-check
+pnpm test
+pnpm build
+node scripts/check-package.mjs
+```
+
+The Electron test for this plugin version is `e2e/cv-hub-plugin.spec.ts` (device-flow sign-in against a local fixture API, then the native diff). Copy it into the Orca checkout's `tests/e2e/`, then, after its E2E build prerequisites:
+
+```sh
+ORCA_BACKGROUND_LAUNCH=1 CV_HUB_PLUGIN_PATH=/absolute/path/to/cv-hub-orca-plugin/dist pnpm exec playwright test --config tests/playwright.config.ts cv-hub-plugin.spec.ts --workers=1
+```
+
+See [VALIDATION.md](VALIDATION.md) for the executed checks and environment limits.
+
+## Security and license
+
+Report vulnerabilities privately through GitHub's **Report a vulnerability** on this repository rather than in a public issue. Never paste OAuth tokens, device codes or private repository contents into issues.
+
+MIT, see [LICENSE](LICENSE). The bundled host patch is derived from [Orca](https://github.com/stablyai/orca), also MIT.

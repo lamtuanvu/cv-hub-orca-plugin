@@ -1,0 +1,12 @@
+{
+  "repository": "https://github.com/stablyai/orca",
+  "commit": "8d6fec597bfae3f1e1bf961a6cae2837f925a3b2",
+  "sourceVersion": "1.4.197",
+  "target": {
+    "repository": "https://github.com/lamtuanvu/orca",
+    "pullRequest": "https://github.com/lamtuanvu/orca/pull/1",
+    "commit": "75b02825f77fae229b4c4e91f42f6600e761c61a",
+    "contract": "https://github.com/lamtuanvu/orca/blob/75b02825f77fae229b4c4e91f42f6600e761c61a/docs/reference/plugin-panel-review-api.md"
+  },
+  "patch": "orca-native-plugin-reviews.patch"
+}

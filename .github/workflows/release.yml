@@ -1,0 +1,104 @@
+name: Build and release
+
+# Every push to main builds, tests and packages the plugin, then publishes it:
+# - the first push at a new version (no v<version> tag yet) creates the v<version> release;
+# - later pushes at the same version refresh the rolling "edge" prerelease.
+# A new version also gets a plugin-v<version> tag and moves the dist branch: commits that
+# hold only the built plugin, so Orca can install it from Git or from orca-marketplace.json.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm type-check
+      - run: pnpm test
+      - run: pnpm run package
+
+      - name: Check versions and committed manifest
+        id: version
+        run: |
+          version=$(node -p "require('./dist/orca-plugin.json').version")
+          pkg=$(node -p "require('./package.json').version")
+          if [ "$version" != "$pkg" ]; then
+            echo "::error::package.json is $pkg but PLUGIN_VERSION is $version"
+            exit 1
+          fi
+          # The build regenerates both files; the committed copies must match.
+          git diff --exit-code -- orca-plugin.json orca-marketplace.json
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: controlvector.cv-hub-${{ steps.version.outputs.version }}
+          path: dist/*.zip
+
+      - name: Publish built plugin tag
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: |
+          tag="plugin-v$VERSION"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+            echo "$tag already published"
+            exit 0
+          fi
+          # Build a tree from dist/ alone; Orca copies the whole checkout into the install.
+          export GIT_INDEX_FILE="$RUNNER_TEMP/dist.index"
+          git --work-tree=dist add main.mjs panel.html orca-plugin.json
+          tree=$(git write-tree)
+          parent=()
+          if git fetch -q origin dist 2>/dev/null; then parent=(-p FETCH_HEAD); fi
+          commit=$(git commit-tree "$tree" "${parent[@]}" \
+            -m "CV Hub for Orca $VERSION" -m "Built from $GITHUB_SHA.")
+          git tag "$tag" "$commit"
+          git push origin "refs/tags/$tag" "$commit:refs/heads/dist"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          zip="dist/controlvector.cv-hub-$VERSION.zip"
+          short=$(git rev-parse --short HEAD)
+          notes="Requires the [lamtuanvu/orca](https://github.com/lamtuanvu/orca) build of Orca; stock Orca cannot load this plugin. In Orca, open Settings → Plugins and install this zip (Install → Zip file), or update an existing install in place with Update…."
+          if ! git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+            gh release create "v$VERSION" "$zip" \
+              --target "$GITHUB_SHA" \
+              --title "CV Hub for Orca $VERSION" \
+              --notes "$notes"
+          else
+            git tag -f edge "$GITHUB_SHA"
+            git push -f origin refs/tags/edge
+            gh release delete edge --yes 2>/dev/null || true
+            cp "$zip" dist/controlvector.cv-hub-edge.zip
+            gh release create edge dist/controlvector.cv-hub-edge.zip \
+              --prerelease --latest=false \
+              --title "CV Hub for Orca $VERSION (edge $short)" \
+              --notes "Latest build of main at $short. $notes"
+          fi

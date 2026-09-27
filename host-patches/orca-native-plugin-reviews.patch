@@ -1,0 +1,2970 @@
+diff --git a/docs/reference/plugin-panel-review-api.md b/docs/reference/plugin-panel-review-api.md
+new file mode 100644
+index 00000000..ddef68ff
+--- /dev/null
++++ b/docs/reference/plugin-panel-review-api.md
+@@ -0,0 +1,195 @@
++# Sandboxed panels, native reviews, and browser authorization
++
++This experimental desktop contract is introduced by
++[Orca PR #1](https://github.com/lamtuanvu/orca/pull/1) in the `lamtuanvu/orca` fork.
++It is not available in stock Orca. The hardened contract intentionally replaces
++that PR's initial unrestricted own-command and external-browser interfaces.
++
++## Trust boundary
++
++Panels remain opaque-origin sandboxed iframes with `connect-src 'none'` and blocked
++navigation. They receive neither Electron nor filesystem APIs. An approved plugin
++worker is a trusted Node process with filesystem, network, and process access; it
++is **not an OS sandbox**. These changes limit what a panel can ask Orca to dispatch.
++They cannot prevent a malicious worker from using Node directly.
++
++The host derives plugin identity from the live panel/worker connection. A payload
++cannot select a different plugin. Consent changes when panel contracts or review
++provider mappings change. Re-enable updated plugins through the normal consent UI.
++Refresh, activation reconciliation, and disposal invalidate active review sessions
++and browser authorization handles. Reopen reviews or restart sign-in afterward.
++
++## Explicit panel commands
++
++A declared worker command is private to the worker/host command machinery unless
++it has a `panel` contract. Here is a manifest contribution (merge it into the
++plugin's `contributes.commands`):
++
++```json
++{
++  "id": "cvhub.authStatus",
++  "title": "CV Hub sign-in status",
++  "panel": {
++    "effect": "read",
++    "input": { "type": "object", "properties": {}, "additionalProperties": false },
++    "output": {
++      "type": "object",
++      "properties": { "state": { "type": "string", "maxLength": 32 } },
++      "required": ["state"],
++      "additionalProperties": false
++    }
++  }
++}
++```
++
++Declare capability `{ "kind": "commands:invoke-own" }`. Register the implementation
++with `orca.commands.register('cvhub.authStatus', handler)` as usual. From the
++panel, send the existing `orca-panel-action` message with action
++`commands.invokeOwn` and params `{ commandId: 'cvhub.authStatus', args: {} }`.
++Only opted-in commands are dispatched. Built-in `action` aliases cannot opt in.
++The host validates input before execution and output before replying to the panel.
++Omitted args default to `{}`; explicit `null` stays `null`.
++
++`effect: "read" | "write"` describes the operation for consent fingerprinting; it
++is not a side-effect detector, extra confirmation, or a substitute for server ACLs.
++An exposed command must return a deliberately sanitized view model, never tokens,
++raw HTTP errors, arbitrary method results, or private review content. A worker
++wrapper that forwards private loaders would defeat that plugin's intended boundary.
++
++The schema dialect is bounded JSON, not full JSON Schema:
++
++| Type | Supported keywords (besides `type`, optional `nullable`) |
++| --- | --- |
++| object | `properties`, `required`, mandatory `additionalProperties: false` |
++| array | `items`, optional `maxItems` (default and maximum 2000) |
++| string | `minLength`, `maxLength` (default and maximum 49152), string `enum` |
++| number / integer | `minimum`, `maximum` |
++| boolean / null | none |
++
++Unknown or inapplicable keywords are rejected. No refs, patterns, executable
++validators, unions, coercion, or open dictionaries. Nesting is limited to eight
++levels below the root, objects to 64 properties, enum to 64 strings of at most
++512 characters, and serialized schema definitions to 16384 characters. Reserved
++property names `__proto__`, `constructor`, and `prototype` are rejected. Panel
++args/results additionally have a 48 KiB UTF-8 JSON limit; paginate lists.
++
++## Native review providers
++
++Declare `{ "kind": "diffs:open" }`. Register the two loaders as ordinary worker
++commands **without** `panel` contracts. Declare their fixed mapping:
++
++```json
++{
++  "id": "cvhub.pullRequest",
++  "title": "CV Hub pull request",
++  "snapshotCommand": "cvhub.getReview",
++  "contentCommand": "cvhub.readReviewFile",
++  "input": {
++    "type": "object",
++    "properties": {
++      "owner": { "type": "string", "minLength": 1, "maxLength": 256 },
++      "repo": { "type": "string", "minLength": 1, "maxLength": 256 },
++      "number": { "type": "integer", "minimum": 1 }
++    },
++    "required": ["owner", "repo", "number"],
++    "additionalProperties": false
++  }
++}
++```
++
++Place this entry under `contributes.reviewProviders` (maximum 32). A panel opens
++it with action `diffs.openReview` and params:
++
++```js
++{ providerId: 'cvhub.pullRequest', args: { owner: 'acme', repo: 'demo', number: 7 } }
++```
++
++The host resolves the declared provider and validates input **before** invoking
++the snapshot command. Caller-selected `commandId` or `contentCommandId` fields
++are rejected. The panel receives only `{ reviewId, revision }`; the trusted Orca
++renderer receives the metadata/context and renders the native read-only DiffViewer.
++Review IDs are bound to the renderer owner and plugin generation. The host permits
++10 reviews per owner and four concurrent file reads per review.
++
++Snapshot loader input is the validated provider args. Its exact result shape is:
++
++```js
++{
++  title: 'acme/demo #7',
++  revision: '<immutable head SHA>',
++  context: { /* worker-defined JSON for immutable blob reads; never credentials */ },
++  files: [{ path: 'src/a.ts', status: 'modified', additions: 1, deletions: 1 }]
++}
++```
++
++`oldPath` and `binary` are optional file fields. Status is one of `added`, `deleted`,
++`modified`, `renamed`, `copied`. Maximums: 2000 files, 1 MiB total metadata,
++16 KiB context, title/revision 512 characters, paths 4096 characters.
++
++The content loader receives `{ context, file }`, selected by the host from that
++snapshot, and returns `{ original, modified }`. Each side has one of these forms:
++
++```js
++{ kind: 'text', content: '...' } // at most 2 MiB UTF-8
++{ kind: 'absent' }
++{ kind: 'binary', size: 123 } // size optional
++{ kind: 'limited', reason: 'File too large', size: 123 } // size optional
++{ kind: 'error', code: 'not_found', message: 'File unavailable' }
++```
++
++Objects are strict: do not return extra fields. Keep snapshot context immutable:
++original blobs come from the merge base and modified blobs from the inspected
++head. Renames use `oldPath` for the original. The provider remains responsible
++for read-only loader behavior; the host prevents a panel selecting another handler,
++not side effects inside trusted plugin code.
++
++This version provides a desktop dialog with file selection and split/unified
++Monaco diffs. It does not add editor tabs, inline threads, merging, or remote web
++review support. Unsupported clients fail closed; do not fall back to passing file
++contents through panel commands.
++
++## Worker-only browser authorization
++
++Declare `{ "kind": "browser:authorize" }`. The old `browser.openExternal` method
++and `browser:open-external` capability are removed. Panels cannot call these methods.
++Workers use the existing `orca.host.call(method, params)` interface:
++
++```js
++const { attemptId, expiresAt } = await orca.host.call('browser.createAuthorization', {
++  serverOrigin: 'https://api.example.com',
++  verificationUrl: 'https://app.example.com/device?user_code=ABCD-EFGH',
++  expiresIn: 600
++})
++const { opened } = await orca.host.call('browser.openAuthorization', { attemptId })
++await orca.host.call('browser.cancelAuthorization', { attemptId }) // { ok: true }
++```
++
++Create registers an attempt; it does not perform OAuth. `expiresAt` is Unix time
++in milliseconds. `expiresIn` is an integer from 1 to 900 seconds; use the remaining
++device-flow lifetime, capped at 900. `serverOrigin` must be an exact origin without
++a trailing slash or path. URLs must be HTTPS, except HTTP on `localhost`,
++`127.0.0.1`, or `[::1]` for local development. Credentials in URLs are rejected.
++The URL maximum is 2048 characters. API and verification origins may differ.
++The worker must validate the verification destination against its configured
++service/discovery; Orca does not discover or attest an OAuth server.
++
++Open presents a native confirmation naming the plugin and displaying the server,
++destination origin, and full verification URL. Cancel is the default. Only the
++stored URL can open; handles are scoped to the originating plugin, single-use even
++after denial, and checked again after confirmation for expiry, cancellation, and
++revocation. Only one confirmation may be pending globally. Creation is limited to
++one attempt per plugin per ten seconds and one live attempt per plugin. Global
++attempt/rate-tracking capacity is 128. Cancel on completion, denial, failure, or
++restart. Cancel is idempotent and does not dismiss an already visible native dialog;
++accepting that stale dialog cannot open its URL.
++
++Run sign-in as a worker state machine. Panel commands start/poll/cancel short
++operations; do not keep a panel command waiting for device authorization or native
++confirmation. Worker command invocations have a 30-second timeout. Show the user code and a copyable
++verification URL for manual navigation. Never expose device codes, access/refresh
++tokens, authorization headers, or host attempt IDs to the iframe.
++
++OAuth registration, device-code requests, polling/backoff, expiry, refresh rotation,
++revocation, encrypted token storage, and authenticated REST/MCP calls belong to the
++service integration worker/backend. The host does not need CV Hub-specific routes,
++client secrets, or account knowledge.
+diff --git a/src/main/ipc/plugins.ts b/src/main/ipc/plugins.ts
+index eac8b09e..ce619e81 100644
+--- a/src/main/ipc/plugins.ts
++++ b/src/main/ipc/plugins.ts
+@@ -173,6 +173,22 @@ export function registerPluginHandlers(
+     }
+   )
+ 
++  ipcMain.handle('plugins:readReviewFile', async (event, args: unknown) => {
++    const input = z
++      .object({ reviewId: z.string().uuid(), index: z.number().int().min(0).max(1999) })
++      .strict()
++      .parse(args)
++    return pluginService.reviews.read(
++      rendererPanelOwner(event.sender.id),
++      input.reviewId,
++      input.index
++    )
++  })
++  ipcMain.handle('plugins:closeReview', (event, args: unknown) => {
++    const input = z.object({ reviewId: z.string().uuid() }).strict().parse(args)
++    pluginService.reviews.close(rendererPanelOwner(event.sender.id), input.reviewId)
++  })
++
+   ipcMain.handle('plugins:invokeCommand', async (_event, args: unknown) => {
+     await pluginService.whenReady()
+     const parsed = invokeCommandArgsSchema.parse(args)
+diff --git a/src/main/plugins/plugin-browser-authorization.test.ts b/src/main/plugins/plugin-browser-authorization.test.ts
+new file mode 100644
+index 00000000..f6cb43a0
+--- /dev/null
++++ b/src/main/plugins/plugin-browser-authorization.test.ts
+@@ -0,0 +1,150 @@
++import { describe, expect, it, vi } from 'vitest'
++import { PluginBrowserAuthorizations } from './plugin-browser-authorization'
++import { getPluginHostMethodSpec } from '../../shared/plugins/plugin-host-api'
++
++function fixture() {
++  let now = 1000
++  let generation: string | null = 'one'
++  const confirm = vi.fn(async () => true)
++  const open = vi.fn(async () => undefined)
++  const browser = new PluginBrowserAuthorizations({
++    resolve: () => (generation ? { name: 'Demo', generation } : null),
++    confirm,
++    open,
++    now: () => now
++  })
++  return {
++    browser,
++    confirm,
++    open,
++    advance: () => {
++      now += 60000
++    },
++    revoke: () => {
++      generation = null
++    },
++    replace: () => {
++      generation = 'two'
++    }
++  }
++}
++const input = {
++  serverOrigin: 'https://api.example',
++  verificationUrl: 'https://hub.example/device?code=ABCD',
++  expiresIn: 30
++}
++
++describe('browser authorization boundary', () => {
++  it('removes the unrestricted browser API', () => {
++    expect(getPluginHostMethodSpec('browser.openExternal')).toBeNull()
++  })
++  it('binds an attempt to its plugin and exact URL, confirms once, and rejects replay', async () => {
++    const f = fixture()
++    const attempt = f.browser.create('example.demo', input)
++    await expect(f.browser.open('example.other', attempt.attemptId)).rejects.toThrow()
++    expect(f.confirm).not.toHaveBeenCalled()
++    await expect(f.browser.open('example.demo', attempt.attemptId)).resolves.toEqual({
++      opened: true
++    })
++    expect(f.confirm).toHaveBeenCalledWith(
++      expect.objectContaining({
++        serverOrigin: input.serverOrigin,
++        verificationUrl: input.verificationUrl,
++        name: 'Demo'
++      })
++    )
++    expect(f.open).toHaveBeenCalledExactlyOnceWith(input.verificationUrl)
++    await expect(f.browser.open('example.demo', attempt.attemptId)).rejects.toThrow()
++    expect(f.open).toHaveBeenCalledTimes(1)
++  })
++  it('does not open rejected, canceled, expired, or replaced attempts', async () => {
++    for (const kind of ['deny', 'cancel', 'expire', 'replace', 'revoke'] as const) {
++      const f = fixture()
++      const attempt = f.browser.create('example.demo', input)
++      if (kind === 'deny') {
++        f.confirm.mockResolvedValueOnce(false)
++      }
++      if (kind === 'cancel') {
++        f.browser.cancel('example.demo', attempt.attemptId)
++      }
++      if (kind === 'expire') {
++        f.advance()
++      }
++      if (kind === 'replace') {
++        f.replace()
++      }
++      if (kind === 'revoke') {
++        f.revoke()
++      }
++      await f.browser.open('example.demo', attempt.attemptId).catch(() => undefined)
++      expect(f.open).not.toHaveBeenCalled()
++    }
++  })
++  it('rechecks cancellation and expiry after the trusted confirmation', async () => {
++    for (const expire of [false, true]) {
++      const f = fixture()
++      const attempt = f.browser.create('example.demo', input)
++      f.confirm.mockImplementationOnce(async () => {
++        if (expire) {
++          f.advance()
++        } else {
++          f.browser.cancel('example.demo', attempt.attemptId)
++        }
++        return true
++      })
++      await expect(f.browser.open('example.demo', attempt.attemptId)).rejects.toThrow()
++      expect(f.open).not.toHaveBeenCalled()
++    }
++  })
++  it('bounds requests and rejects unsafe destinations before confirmation', () => {
++    const f = fixture()
++    for (const verificationUrl of [
++      'javascript:alert(1)',
++      'file:///tmp/a',
++      'http://evil.example',
++      'https://user:pass@example.org'
++    ]) {
++      expect(() => f.browser.create('example.demo', { ...input, verificationUrl })).toThrow()
++    }
++    f.browser.create('example.demo', input)
++    expect(() => f.browser.create('example.demo', input)).toThrow()
++    expect(f.confirm).not.toHaveBeenCalled()
++  })
++})
++
++it('serializes confirmations across plugins and keeps rate limits after cancellation', async () => {
++  const f = fixture()
++  const first = f.browser.create('example.first', input)
++  const second = f.browser.create('example.second', input)
++  let finish: (allowed: boolean) => void = () => undefined
++  f.confirm.mockImplementationOnce(
++    () =>
++      new Promise((resolve) => {
++        finish = resolve
++      })
++  )
++  const pending = f.browser.open('example.first', first.attemptId)
++  await expect(f.browser.open('example.second', second.attemptId)).rejects.toThrow()
++  f.browser.cancel('example.first', first.attemptId)
++  expect(() => f.browser.create('example.first', input)).toThrow()
++  finish(true)
++  await expect(pending).rejects.toThrow()
++  expect(f.open).not.toHaveBeenCalled()
++})
++
++it('rechecks plugin authority after confirmation and after clearing pending attempts', async () => {
++  for (const change of ['replace', 'revoke', 'clear'] as const) {
++    const f = fixture()
++    const attempt = f.browser.create('example.demo', input)
++    f.confirm.mockImplementationOnce(async () => {
++      if (change === 'clear') {
++        f.browser.clear()
++      } else {
++        f[change]()
++      }
++      return true
++    })
++    await expect(f.browser.open('example.demo', attempt.attemptId)).rejects.toThrow()
++    expect(f.open).not.toHaveBeenCalled()
++  }
++})
+diff --git a/src/main/plugins/plugin-browser-authorization.ts b/src/main/plugins/plugin-browser-authorization.ts
+new file mode 100644
+index 00000000..36c5478b
+--- /dev/null
++++ b/src/main/plugins/plugin-browser-authorization.ts
+@@ -0,0 +1,107 @@
++import { randomUUID } from 'node:crypto'
++import {
++  pluginCreateAuthorizationSchema,
++  type PluginCreateAuthorization
++} from '../../shared/plugins/plugin-browser-contract'
++
++type Identity = { name: string; generation: string }
++type Attempt = PluginCreateAuthorization &
++  Identity & { plugin: string; expiresAt: number; used: boolean }
++type Services = {
++  resolve(plugin: string): Identity | null
++  confirm(attempt: Readonly<Attempt>): Promise<boolean>
++  open(url: string): Promise<void>
++  now?(): number
++}
++
++export class PluginBrowserAuthorizations {
++  private readonly attempts = new Map<string, Attempt>()
++  private readonly recent = new Map<string, number>()
++  private confirming = false
++  constructor(private readonly services: Services) {}
++  private now(): number {
++    return this.services.now?.() ?? Date.now()
++  }
++
++  create(
++    plugin: string,
++    input: PluginCreateAuthorization
++  ): { attemptId: string; expiresAt: number } {
++    const request = pluginCreateAuthorizationSchema.parse(input)
++    const identity = this.services.resolve(plugin)
++    if (!identity) {
++      throw new Error('Plugin unavailable')
++    }
++    const now = this.now()
++    for (const [id, attempt] of this.attempts) {
++      if (attempt.expiresAt <= now) {
++        this.attempts.delete(id)
++      }
++    }
++    for (const [key, timestamp] of this.recent) {
++      if (now - timestamp >= 10000) {
++        this.recent.delete(key)
++      }
++    }
++    if (
++      this.recent.has(plugin) ||
++      this.recent.size >= 128 ||
++      this.attempts.size >= 128 ||
++      [...this.attempts.values()].some((attempt) => attempt.plugin === plugin)
++    ) {
++      throw new Error('Authorization already pending or rate limited')
++    }
++    const attemptId = randomUUID()
++    const expiresAt = now + request.expiresIn * 1000
++    this.recent.set(plugin, now)
++    this.attempts.set(attemptId, { ...request, ...identity, plugin, expiresAt, used: false })
++    return { attemptId, expiresAt }
++  }
++
++  private resolve(plugin: string, id: string): Attempt {
++    const attempt = this.attempts.get(id)
++    const current = this.services.resolve(plugin)
++    if (
++      !attempt ||
++      attempt.plugin !== plugin ||
++      attempt.expiresAt <= this.now() ||
++      current?.generation !== attempt.generation
++    ) {
++      throw new Error('Authorization unavailable')
++    }
++    return attempt
++  }
++
++  async open(plugin: string, id: string): Promise<{ opened: boolean }> {
++    const attempt = this.resolve(plugin, id)
++    if (attempt.used || this.confirming) {
++      throw new Error('Authorization already opened or confirmation pending')
++    }
++    attempt.used = true
++    this.confirming = true
++    try {
++      const accepted = await this.services.confirm(attempt)
++      if (!accepted) {
++        return { opened: false }
++      }
++      if (this.resolve(plugin, id) !== attempt) {
++        throw new Error('Authorization unavailable')
++      }
++      await this.services.open(attempt.verificationUrl)
++      return { opened: true }
++    } finally {
++      this.confirming = false
++      // Keep the consumed handle until cancel/expiry; it cannot open another URL or window.
++    }
++  }
++
++  cancel(plugin: string, id: string): { ok: true } {
++    if (this.attempts.get(id)?.plugin === plugin) {
++      this.attempts.delete(id)
++    }
++    return { ok: true }
++  }
++  clear(): void {
++    this.attempts.clear()
++  }
++}
+diff --git a/src/main/plugins/plugin-browser-host.ts b/src/main/plugins/plugin-browser-host.ts
+new file mode 100644
+index 00000000..c1a508a3
+--- /dev/null
++++ b/src/main/plugins/plugin-browser-host.ts
+@@ -0,0 +1,36 @@
++import type { ValidDiscoveredPlugin } from './plugin-discovery'
++import { PluginBrowserAuthorizations } from './plugin-browser-authorization'
++
++export function createPluginBrowserAuthorizations(
++  resolve: (key: string) => ValidDiscoveredPlugin | null
++): PluginBrowserAuthorizations {
++  return new PluginBrowserAuthorizations({
++    resolve: (key) => {
++      const plugin = resolve(key)
++      return plugin
++        ? {
++            name: plugin.manifest.name,
++            generation: JSON.stringify([plugin.rootDir, plugin.manifest])
++          }
++        : null
++    },
++    confirm: async (attempt) => {
++      const { dialog } = await import('electron')
++      const { response } = await dialog.showMessageBox({
++        type: 'question',
++        title: 'Authorize plugin sign-in',
++        message: `${attempt.name} wants to open your browser`,
++        detail: `The service will ask you to approve access. Continue only if you recognize this server and destination.\n\nServer: ${attempt.serverOrigin}\nDestination: ${new URL(attempt.verificationUrl).origin}\n\n${attempt.verificationUrl}`,
++        buttons: ['Cancel', 'Continue in browser'],
++        defaultId: 0,
++        cancelId: 0,
++        noLink: true
++      })
++      return response === 1
++    },
++    open: async (url) => {
++      const { shell } = await import('electron')
++      await shell.openExternal(url)
++    }
++  })
++}
+diff --git a/src/main/plugins/plugin-browser-lifecycle.test.ts b/src/main/plugins/plugin-browser-lifecycle.test.ts
+new file mode 100644
+index 00000000..b320a449
+--- /dev/null
++++ b/src/main/plugins/plugin-browser-lifecycle.test.ts
+@@ -0,0 +1,103 @@
++import { mkdtemp, rm, writeFile } from 'node:fs/promises'
++import { tmpdir } from 'node:os'
++import { join } from 'node:path'
++import { expect, it, vi } from 'vitest'
++import { pluginManifestSchema } from '../../shared/plugins/plugin-manifest'
++import { fingerprintPluginConsent } from '../../shared/plugins/plugin-consent-fingerprint'
++import { pluginCreatedAuthorizationSchema } from '../../shared/plugins/plugin-browser-contract'
++import { PluginService } from './plugin-service'
++
++const electron = vi.hoisted(() => ({
++  confirm: vi.fn<() => Promise<{ response: number }>>(),
++  open: vi.fn(async () => undefined)
++}))
++vi.mock('electron', () => ({
++  dialog: { showMessageBox: electron.confirm },
++  shell: { openExternal: electron.open }
++}))
++
++it.each(['disable-enable', 'dispose'])(
++  'invalidates browser confirmation during %s',
++  async (action) => {
++    electron.confirm.mockReset()
++    electron.open.mockClear()
++    let finish: (value: { response: number }) => void = () => undefined
++    electron.confirm.mockImplementation(
++      () =>
++        new Promise((resolve) => {
++          finish = resolve
++        })
++    )
++    const root = await mkdtemp(join(tmpdir(), 'orca-browser-lifecycle-'))
++    const manifest = pluginManifestSchema.parse({
++      manifestVersion: 1,
++      id: 'demo',
++      publisher: 'example',
++      name: 'Demo',
++      version: '1.0.0',
++      engines: { orca: '>=1.0.0' },
++      pluginApi: 1,
++      main: 'main.js',
++      capabilities: [{ kind: 'browser:authorize' }]
++    })
++    await writeFile(join(root, 'orca-plugin.json'), JSON.stringify(manifest))
++    await writeFile(join(root, 'main.js'), 'export default function() {}')
++    let disabled: string[] = []
++    const service = new PluginService({
++      userDataPath: root,
++      hostVersion: '1.4.197',
++      isPluginSystemEnabled: () => true,
++      getDisabledPlugins: () => disabled,
++      getPluginConsents: () => ({ 'example.demo': fingerprintPluginConsent(manifest) }),
++      getDevPluginPaths: () => [root]
++    })
++    service.setRuntimeDelegate({
++      resolveActiveWorktreeContext: async () => null,
++      listTerminals: async () => ({ terminals: [] }),
++      sendTerminal: async () => ({ accepted: false }),
++      dispatchPluginNotification: async () => ({ delivered: false })
++    })
++    try {
++      await service.initialize()
++      const created = await service.executeHostCall(
++        'example.demo',
++        'browser.createAuthorization',
++        {
++          serverOrigin: 'https://api.example',
++          verificationUrl: 'https://hub.example/device',
++          expiresIn: 60
++        },
++        { viaPanel: false }
++      )
++      expect(created.ok).toBe(true)
++      if (!created.ok) {
++        throw new Error(created.error)
++      }
++      const attempt = pluginCreatedAuthorizationSchema.parse(created.value)
++      const pending = service.executeHostCall(
++        'example.demo',
++        'browser.openAuthorization',
++        { attemptId: attempt.attemptId },
++        { viaPanel: false }
++      )
++      await vi.waitFor(() => expect(electron.confirm).toHaveBeenCalledTimes(1))
++      if (action === 'dispose') {
++        await service.dispose()
++      } else {
++        disabled = ['example.demo']
++        await service.reconcileActivationState()
++        disabled = []
++        await service.reconcileActivationState()
++      }
++      finish({ response: 1 })
++      expect((await pending).ok).toBe(false)
++      expect(electron.open).not.toHaveBeenCalled()
++      if (action === 'dispose') {
++        expect(service.getGrantedCapabilities('example.demo')).toBeNull()
++      }
++    } finally {
++      await service.dispose()
++      await rm(root, { recursive: true, force: true })
++    }
++  }
++)
+diff --git a/src/main/plugins/plugin-host-conformance.test.ts b/src/main/plugins/plugin-host-conformance.test.ts
+index bc43dd74..86476abd 100644
+--- a/src/main/plugins/plugin-host-conformance.test.ts
++++ b/src/main/plugins/plugin-host-conformance.test.ts
+@@ -27,6 +27,17 @@ type HostCallAdapter = (request: unknown, viaPanel: boolean) => Promise<PluginPa
+ 
+ function createServices(): PluginHostServices {
+   return {
++    invokeOwnCommand: async () => ({ pong: true }),
++    createAuthorization: () => ({
++      attemptId: '00000000-0000-4000-8000-000000000001',
++      expiresAt: 1000
++    }),
++    openAuthorization: async () => ({ opened: true }),
++    cancelAuthorization: () => ({ ok: true }),
++    openReview: async () => ({
++      reviewId: '00000000-0000-4000-8000-000000000001',
++      review: { title: 'Review', revision: 'one', context: null, files: [] }
++    }),
+     resolveActiveWorktreeContext: vi.fn().mockResolvedValue({
+       worktreeId: WORKTREE_ID,
+       branch: 'main',
+@@ -105,6 +116,15 @@ function createAdapters(
+ }
+ 
+ const successParams: Record<string, unknown> = {
++  'commands.invokeOwn': { commandId: 'ping' },
++  'diffs.openReview': { providerId: 'pull-request', args: {} },
++  'browser.createAuthorization': {
++    serverOrigin: 'https://api.example',
++    verificationUrl: 'https://hub.example/device',
++    expiresIn: 30
++  },
++  'browser.openAuthorization': { attemptId: '00000000-0000-4000-8000-000000000001' },
++  'browser.cancelAuthorization': { attemptId: '00000000-0000-4000-8000-000000000001' },
+   'workspace.readContext': {},
+   'terminal.sendText': { terminalId: TERMINAL_ID, text: 'echo hi', enter: true },
+   'notifications.show': { title: 'Hello' },
+@@ -121,8 +141,7 @@ const successParams: Record<string, unknown> = {
+ }
+ 
+ describe('plugin host main/relay conformance', () => {
+-  it('runs a granted success through both transports for all 13 v0 methods', async () => {
+-    expect(PLUGIN_HOST_API_V0).toHaveLength(13)
++  it('runs a granted success through both transports for every public method', async () => {
+     expect(Object.keys(successParams).sort()).toEqual(
+       PLUGIN_HOST_API_V0.map((entry) => entry.name).sort()
+     )
+diff --git a/src/main/plugins/plugin-host-method-bindings.ts b/src/main/plugins/plugin-host-method-bindings.ts
+index b1073027..3b183ae5 100644
+--- a/src/main/plugins/plugin-host-method-bindings.ts
++++ b/src/main/plugins/plugin-host-method-bindings.ts
+@@ -1,3 +1,14 @@
++import {
++  pluginCreateAuthorizationSchema,
++  pluginAuthorizationHandleSchema,
++  type PluginCreateAuthorization
++} from '../../shared/plugins/plugin-browser-contract'
++import {
++  pluginOwnCommandSchema,
++  pluginOpenReviewSchema,
++  type PluginOpenedReview,
++  type PluginOpenReviewInput
++} from '../../shared/plugins/plugin-review-contract'
+ import {
+   getPluginHostMethodSpec,
+   PLUGIN_HOST_API_V0,
+@@ -17,6 +28,14 @@ export type PluginWorktreeContext = {
+ /** Structural service surface the facade delegates to. Desktop main binds it
+  *  over runtime services; relay policy and conformance tests bind fakes. */
+ export type PluginHostServices = {
++  invokeOwnCommand?(pluginId: string, commandId: string, args: unknown): Promise<unknown>
++  openReview?(pluginId: string, input: PluginOpenReviewInput): Promise<PluginOpenedReview>
++  createAuthorization?(
++    pluginId: string,
++    input: PluginCreateAuthorization
++  ): { attemptId: string; expiresAt: number }
++  openAuthorization?(pluginId: string, attemptId: string): Promise<{ opened: boolean }>
++  cancelAuthorization?(pluginId: string, attemptId: string): { ok: true }
+   resolveActiveWorktreeContext(): Promise<PluginWorktreeContext | null>
+   listWorktreeTerminals(worktreeId: string): Promise<{ id: string }[]>
+   sendTerminalText(
+@@ -69,6 +88,43 @@ function definePluginMethod(
+ }
+ 
+ const HANDLERS = new Map<string, BoundPluginHostMethod>([
++  definePluginMethod('commands.invokeOwn', async (params, { pluginId, services }) => {
++    if (!services.invokeOwnCommand) {
++      throw new Error('Panel commands unavailable in this host')
++    }
++    const input = pluginOwnCommandSchema.parse(params)
++    return (await services.invokeOwnCommand(pluginId, input.commandId, input.args)) ?? null
++  }),
++  definePluginMethod('diffs.openReview', async (params, { pluginId, services }) => {
++    if (!services.openReview) {
++      throw new Error('Native reviews unavailable in this host')
++    }
++    return services.openReview(pluginId, pluginOpenReviewSchema.parse(params))
++  }),
++  definePluginMethod('browser.createAuthorization', async (params, { pluginId, services }) => {
++    if (!services.createAuthorization) {
++      throw new Error('Browser authorization unavailable')
++    }
++    return services.createAuthorization(pluginId, pluginCreateAuthorizationSchema.parse(params))
++  }),
++  definePluginMethod('browser.openAuthorization', async (params, { pluginId, services }) => {
++    if (!services.openAuthorization) {
++      throw new Error('Browser authorization unavailable')
++    }
++    return services.openAuthorization(
++      pluginId,
++      pluginAuthorizationHandleSchema.parse(params).attemptId
++    )
++  }),
++  definePluginMethod('browser.cancelAuthorization', async (params, { pluginId, services }) => {
++    if (!services.cancelAuthorization) {
++      throw new Error('Browser authorization unavailable')
++    }
++    return services.cancelAuthorization(
++      pluginId,
++      pluginAuthorizationHandleSchema.parse(params).attemptId
++    )
++  }),
+   definePluginMethod('workspace.readContext', async (_params, { services }) => {
+     const context = await services.resolveActiveWorktreeContext()
+     if (!context) {
+diff --git a/src/main/plugins/plugin-panel-authority.test.ts b/src/main/plugins/plugin-panel-authority.test.ts
+new file mode 100644
+index 00000000..75023134
+--- /dev/null
++++ b/src/main/plugins/plugin-panel-authority.test.ts
+@@ -0,0 +1,156 @@
++import { describe, expect, it, vi } from 'vitest'
++import { pluginManifestSchema } from '../../shared/plugins/plugin-manifest'
++import { pluginOpenReviewSchema } from '../../shared/plugins/plugin-review-contract'
++import { fingerprintPluginConsent } from '../../shared/plugins/plugin-consent-fingerprint'
++import { createPluginReviewSessions } from './plugin-review-host'
++
++const empty = { type: 'object', properties: {}, additionalProperties: false }
++const manifestInput = {
++  manifestVersion: 1,
++  id: 'demo',
++  publisher: 'example',
++  name: 'Demo',
++  version: '1.0.0',
++  engines: { orca: '>=1.4.197' },
++  pluginApi: 1,
++  main: 'main.js',
++  capabilities: [{ kind: 'commands:invoke-own' }, { kind: 'diffs:open' }],
++  contributes: {
++    commands: [
++      { id: 'safe', title: 'Safe', panel: { input: empty, output: empty, effect: 'read' } },
++      { id: 'snapshot', title: 'Snapshot' },
++      { id: 'content', title: 'Content' },
++      { id: 'write', title: 'Write' }
++    ],
++    reviewProviders: [
++      {
++        id: 'pull-request',
++        title: 'Pull request',
++        snapshotCommand: 'snapshot',
++        contentCommand: 'content',
++        input: empty
++      }
++    ]
++  }
++}
++function fixture() {
++  const manifest = pluginManifestSchema.parse(manifestInput)
++  const plugin = {
++    pluginKey: 'example.demo',
++    rootDir: '/test/demo',
++    manifest,
++    consentFingerprint: 'test',
++    contentHash: null,
++    isDev: true
++  }
++  const invoke = vi.fn(async () => ({ title: 'PR', revision: 'one', context: null, files: [] }))
++  return { manifest, invoke, sessions: createPluginReviewSessions(() => plugin, invoke) }
++}
++describe('plugin panel authority', () => {
++  it('rejects command names supplied to the review API before dispatch', () => {
++    expect(
++      pluginOpenReviewSchema.safeParse({
++        commandId: 'write',
++        contentCommandId: 'content',
++        args: {}
++      }).success
++    ).toBe(false)
++  })
++  it('resolves only registered providers and validates input before dispatch', async () => {
++    const { sessions, invoke } = fixture()
++    await expect(
++      sessions.open('renderer:1', 'example.demo', { providerId: 'write', args: {} })
++    ).rejects.toThrow()
++    await expect(
++      sessions.open('renderer:1', 'example.demo', {
++        providerId: 'pull-request',
++        args: { injected: true }
++      })
++    ).rejects.toThrow()
++    expect(invoke).not.toHaveBeenCalled()
++    await sessions.open('renderer:1', 'example.demo', { providerId: 'pull-request', args: {} })
++    expect(invoke).toHaveBeenCalledWith('example.demo', 'snapshot', {})
++  })
++  it('rejects a provider that reuses a panel-exposed command', () => {
++    const input = structuredClone(manifestInput)
++    input.contributes.reviewProviders[0].snapshotCommand = 'safe'
++    expect(pluginManifestSchema.safeParse(input).success).toBe(false)
++  })
++  it('requires new consent when a panel command contract changes', () => {
++    const first = pluginManifestSchema.parse(manifestInput)
++    const second = pluginManifestSchema.parse({
++      ...manifestInput,
++      contributes: {
++        ...manifestInput.contributes,
++        commands: [
++          ...manifestInput.contributes.commands,
++          {
++            id: 'another',
++            title: 'Another',
++            panel: { input: empty, output: empty, effect: 'write' }
++          }
++        ]
++      }
++    })
++    expect(fingerprintPluginConsent(first)).not.toBe(fingerprintPluginConsent(second))
++  })
++})
++
++it('keeps internal commands and invalid arguments out of the worker', async () => {
++  const { manifest } = fixture()
++  const { invokePanelCommand } = await import('./plugin-panel-command-dispatch')
++  const invoke = vi.fn(async () => ({}))
++  await expect(invokePanelCommand(manifest, 'content', {}, invoke)).rejects.toThrow()
++  await expect(invokePanelCommand(manifest, 'safe', { extra: true }, invoke)).rejects.toThrow()
++  expect(invoke).not.toHaveBeenCalled()
++  await expect(invokePanelCommand(manifest, 'safe', {}, invoke)).resolves.toEqual({})
++  invoke.mockResolvedValueOnce({ token: 'must-not-reach-panel' })
++  await expect(invokePanelCommand(manifest, 'safe', {}, invoke)).rejects.toThrow()
++})
++
++it('preserves explicit null instead of converting it to an empty object', async () => {
++  const { manifest } = fixture()
++  const { invokePanelCommand } = await import('./plugin-panel-command-dispatch')
++  const invoke = vi.fn(async () => ({}))
++  await expect(invokePanelCommand(manifest, 'safe', null, invoke)).rejects.toThrow()
++  expect(invoke).not.toHaveBeenCalled()
++  const nullable = pluginManifestSchema.parse({
++    ...manifestInput,
++    contributes: {
++      ...manifestInput.contributes,
++      commands: [
++        {
++          id: 'null-command',
++          title: 'Null',
++          panel: {
++            input: { type: 'null' },
++            output: { type: 'null' },
++            effect: 'read'
++          }
++        }
++      ],
++      reviewProviders: []
++    }
++  })
++  await expect(
++    invokePanelCommand(nullable, 'null-command', null, async () => null)
++  ).resolves.toBeNull()
++})
++
++it('requires consent for provider loader, input schema and command effect changes', () => {
++  const first = pluginManifestSchema.parse(manifestInput)
++  for (const change of ['loader', 'input', 'effect'] as const) {
++    const input = structuredClone(manifestInput)
++    if (change === 'loader') {
++      input.contributes.reviewProviders[0].snapshotCommand = 'write'
++    }
++    if (change === 'input') {
++      input.contributes.reviewProviders[0].input.properties = { limit: { type: 'integer' } }
++    }
++    if (change === 'effect') {
++      input.contributes.commands[0].panel!.effect = 'write'
++    }
++    const second = pluginManifestSchema.parse(input)
++    expect(fingerprintPluginConsent(first)).not.toBe(fingerprintPluginConsent(second))
++  }
++})
+diff --git a/src/main/plugins/plugin-panel-command-dispatch.ts b/src/main/plugins/plugin-panel-command-dispatch.ts
+new file mode 100644
+index 00000000..f64c1bd4
+--- /dev/null
++++ b/src/main/plugins/plugin-panel-command-dispatch.ts
+@@ -0,0 +1,28 @@
++import type { PluginManifest } from '../../shared/plugins/plugin-manifest'
++import { compilePluginDataSchema } from '../../shared/plugins/plugin-data-schema'
++
++export async function invokePanelCommand(
++  manifest: PluginManifest,
++  commandId: string,
++  args: unknown,
++  invoke: (command: string, args: unknown) => Promise<unknown>
++): Promise<unknown> {
++  const command = manifest.contributes.commands.find((entry) => entry.id === commandId)
++  if (!command?.panel || command.action !== undefined) {
++    throw new Error('Command is not exposed to panels')
++  }
++  const input = compilePluginDataSchema(command.panel.input)
++  const output = compilePluginDataSchema(command.panel.output)
++  let parsed: unknown
++  try {
++    parsed = input.parse(args === undefined ? {} : args)
++  } catch {
++    throw new Error('Invalid panel command arguments')
++  }
++  const result = await invoke(commandId, parsed)
++  try {
++    return output.parse(result)
++  } catch {
++    throw new Error('Invalid panel command result')
++  }
++}
+diff --git a/src/main/plugins/plugin-panel-controller.ts b/src/main/plugins/plugin-panel-controller.ts
+index a033e154..3b511537 100644
+--- a/src/main/plugins/plugin-panel-controller.ts
++++ b/src/main/plugins/plugin-panel-controller.ts
+@@ -23,8 +23,10 @@ type PluginPanelControllerOptions = {
+   executeHostCall: (
+     pluginKey: string,
+     method: string,
+-    params: unknown
++    params: unknown,
++    ownerKey?: string
+   ) => Promise<PluginPanelActionOutcome>
++  onRevokeOwner?: (ownerKey: string) => void
+   log: (pluginKey: string) => (line: string) => void
+   panelAdmission?: PluginPanelCallAdmission
+ }
+@@ -91,11 +93,19 @@ export class PluginPanelController {
+     ) {
+       return { ok: false, code: 'unavailable', error: 'panel session is no longer available' }
+     }
+-    return this.options.executeHostCall(binding.pluginKey, parsed.data.action, parsed.data.params)
++    return parsed.data.action === 'diffs.openReview'
++      ? this.options.executeHostCall(
++          binding.pluginKey,
++          parsed.data.action,
++          parsed.data.params,
++          ownerKey
++        )
++      : this.options.executeHostCall(binding.pluginKey, parsed.data.action, parsed.data.params)
+   }
+ 
+   revokeOwner(ownerKey: string): void {
+     this.sessions.revokeOwner(ownerKey)
++    this.options.onRevokeOwner?.(ownerKey)
+   }
+ 
+   bindOwnerSignal(ownerKey: string, signal: AbortSignal | undefined): void {
+diff --git a/src/main/plugins/plugin-review-host.ts b/src/main/plugins/plugin-review-host.ts
+new file mode 100644
+index 00000000..c640111a
+--- /dev/null
++++ b/src/main/plugins/plugin-review-host.ts
+@@ -0,0 +1,93 @@
++import type { PluginBrowserAuthorizations } from './plugin-browser-authorization'
++import { compilePluginDataSchema } from '../../shared/plugins/plugin-data-schema'
++import type { ValidDiscoveredPlugin } from './plugin-discovery'
++import { assertPluginWorkerCommand } from './plugin-command-invocation'
++import { PluginReviewSessions } from './plugin-review-sessions'
++import { bindPluginHostServices, type PluginRuntimeDelegate } from './plugin-host-service-bindings'
++import { executePluginHostCallRequest, type PluginHostCallPolicy } from './plugin-host-call-adapter'
++import type { PluginEventBus } from './plugin-event-bus'
++import type { PluginCapabilityKind } from '../../shared/plugins/plugin-capabilities'
++import type { PluginPanelActionOutcome } from '../../shared/plugins/plugin-panel-bridge'
++
++type Invoke = (key: string, command: string, args: unknown) => Promise<unknown>
++export function createPluginReviewSessions(
++  plugin: (key: string) => ValidDiscoveredPlugin | null,
++  invoke: Invoke
++): PluginReviewSessions {
++  return new PluginReviewSessions({
++    generation: (key) => {
++      const entry = plugin(key)
++      return entry ? JSON.stringify([entry.rootDir, entry.manifest]) : null
++    },
++    resolveProvider: (key, id, args) => {
++      const entry = plugin(key)
++      if (!entry) {
++        throw new Error('Plugin unavailable')
++      }
++      const provider = entry.manifest.contributes.reviewProviders?.find((value) => value.id === id)
++      if (!provider) {
++        throw new Error('Unknown review provider')
++      }
++      for (const command of [provider.snapshotCommand, provider.contentCommand]) {
++        assertPluginWorkerCommand(entry, command)
++        if (entry.manifest.contributes.commands.find((value) => value.id === command)?.panel) {
++          throw new Error('Review loaders cannot be exposed to panels')
++        }
++      }
++      return { ...provider, args: compilePluginDataSchema(provider.input).parse(args) }
++    },
++    invoke
++  })
++}
++
++type Services = {
++  delegate: PluginRuntimeDelegate | null
++  pluginsDataDir: string
++  eventBus: PluginEventBus
++  capabilities(key: string): PluginCapabilityKind[] | null
++  panelInvoke: Invoke
++  browser: PluginBrowserAuthorizations
++  reviews: PluginReviewSessions
++  audit: PluginHostCallPolicy['audit']
++}
++export function executeServiceHostCall(
++  pluginKey: string,
++  method: string,
++  params: unknown,
++  options: { viaPanel: boolean; ownerKey?: string },
++  input: Services
++): Promise<PluginPanelActionOutcome> {
++  const owner = options.ownerKey
++  return executePluginHostCallRequest({
++    pluginKey,
++    request: { method, params },
++    viaPanel: options.viaPanel,
++    resolvePolicy: (key) => ({
++      grantedCapabilities: input.capabilities(key),
++      audit: input.audit,
++      services: input.delegate
++        ? {
++            ...bindPluginHostServices({
++              delegate: input.delegate,
++              pluginsDataDir: input.pluginsDataDir,
++              subscribeEvents: (key, events) => input.eventBus.subscribe(key, events)
++            }),
++            invokeOwnCommand: options.viaPanel ? input.panelInvoke : undefined,
++            openReview:
++              options.viaPanel && owner?.startsWith('renderer:')
++                ? (key, args) => input.reviews.open(owner, key, args)
++                : undefined,
++            createAuthorization: options.viaPanel
++              ? undefined
++              : (key, args) => input.browser.create(key, args),
++            openAuthorization: options.viaPanel
++              ? undefined
++              : (key, id) => input.browser.open(key, id),
++            cancelAuthorization: options.viaPanel
++              ? undefined
++              : (key, id) => input.browser.cancel(key, id)
++          }
++        : null
++    })
++  })
++}
+diff --git a/src/main/plugins/plugin-review-integration.ts b/src/main/plugins/plugin-review-integration.ts
+new file mode 100644
+index 00000000..229db130
+--- /dev/null
++++ b/src/main/plugins/plugin-review-integration.ts
+@@ -0,0 +1,40 @@
++import type { ValidDiscoveredPlugin } from './plugin-discovery'
++import { createPluginReviewSessions } from './plugin-review-host'
++import { createPluginBrowserAuthorizations } from './plugin-browser-host'
++import { invokePanelCommand } from './plugin-panel-command-dispatch'
++
++type Invoke = (key: string, command: string, args: unknown) => Promise<unknown>
++export function createPluginReviewIntegration(
++  resolve: (key: string) => ValidDiscoveredPlugin | null,
++  invoke: Invoke
++) {
++  const withCapability = (key: string, capability: string) => {
++    const plugin = resolve(key)
++    return plugin?.manifest.capabilities.some((entry) => entry.kind === capability) ? plugin : null
++  }
++  const reviews = createPluginReviewSessions((key) => withCapability(key, 'diffs:open'), invoke)
++  const browser = createPluginBrowserAuthorizations((key) =>
++    withCapability(key, 'browser:authorize')
++  )
++  return {
++    reviews,
++    browser,
++    panelInvoke: async (key: string, command: string, args: unknown) => {
++      const plugin = withCapability(key, 'commands:invoke-own')
++      if (!plugin) {
++        throw new Error('Plugin unavailable')
++      }
++      const result = await invokePanelCommand(plugin.manifest, command, args, (id, input) =>
++        invoke(key, id, input)
++      )
++      if (resolve(key) !== plugin) {
++        throw new Error('Plugin unavailable')
++      }
++      return result
++    },
++    clear: () => {
++      browser.clear()
++      reviews.clear()
++    }
++  }
++}
+diff --git a/src/main/plugins/plugin-review-sessions.test.ts b/src/main/plugins/plugin-review-sessions.test.ts
+new file mode 100644
+index 00000000..a97d7ca6
+--- /dev/null
++++ b/src/main/plugins/plugin-review-sessions.test.ts
+@@ -0,0 +1,137 @@
++import { describe, expect, it } from 'vitest'
++import { PluginReviewSessions } from './plugin-review-sessions'
++import { getPluginHostMethodSpec } from '../../shared/plugins/plugin-host-api'
++
++const review = {
++  title: 'PR #7',
++  revision: 'base:head',
++  context: { owner: 'acme', repo: 'demo', headSha: 'a'.repeat(40) },
++  files: [{ path: 'new.ts', oldPath: 'old.ts', status: 'renamed', additions: 1, deletions: 1 }]
++}
++function fixture() {
++  let approved = true
++  let generation = 'one'
++  const inputs: unknown[] = []
++  const sessions = new PluginReviewSessions({
++    generation: () => (approved ? generation : null),
++    invoke: async (_plugin, command, args) => {
++      inputs.push(args)
++      return command === 'snapshot'
++        ? review
++        : {
++            original: { kind: 'text', content: 'old\n' },
++            modified: { kind: 'text', content: 'new\n' }
++          }
++    },
++    resolveProvider: (_p, _id, args) => ({
++      snapshotCommand: 'snapshot',
++      contentCommand: 'content',
++      args
++    })
++  })
++  return {
++    sessions,
++    inputs,
++    revoke: () => {
++      approved = false
++    },
++    replace: () => {
++      generation = 'two'
++    }
++  }
++}
++const params = { providerId: 'pull-request', args: { number: 7 } }
++
++describe('plugin external reviews', () => {
++  it('admits own commands and external review opening through explicit capabilities', () => {
++    expect(getPluginHostMethodSpec('commands.invokeOwn')).toMatchObject({
++      panel: true,
++      capability: 'commands:invoke-own'
++    })
++    expect(getPluginHostMethodSpec('diffs.openReview')).toMatchObject({
++      panel: true,
++      capability: 'diffs:open'
++    })
++  })
++  it('binds file loads to the originating window and snapshot file', async () => {
++    const { sessions, inputs } = fixture()
++    const opened = await sessions.open('window:1', 'demo.plugin', params)
++    await expect(sessions.read('window:2', opened.reviewId, 0)).rejects.toThrow('unavailable')
++    expect(await sessions.read('window:1', opened.reviewId, 0)).toEqual({
++      original: { kind: 'text', content: 'old\n' },
++      modified: { kind: 'text', content: 'new\n' }
++    })
++    expect(inputs[1]).toEqual({ context: review.context, file: review.files[0] })
++    await expect(sessions.read('window:1', opened.reviewId, 1)).rejects.toThrow('file')
++  })
++  it('rejects revoked or replaced plugins and discards closed reviews', async () => {
++    for (const change of ['revoke', 'replace'] as const) {
++      const f = fixture()
++      const opened = await f.sessions.open('window:1', 'demo.plugin', params)
++      f[change]()
++      await expect(f.sessions.read('window:1', opened.reviewId, 0)).rejects.toThrow('unavailable')
++    }
++    const f = fixture()
++    const opened = await f.sessions.open('window:1', 'demo.plugin', params)
++    f.sessions.close('window:1', opened.reviewId)
++    await expect(f.sessions.read('window:1', opened.reviewId, 0)).rejects.toThrow('unavailable')
++  })
++  it('does not publish a snapshot after its owner was revoked while loading', async () => {
++    let finish: (value: unknown) => void = () => undefined
++    const sessions = new PluginReviewSessions({
++      generation: () => 'one',
++      resolveProvider: (_p, _id, args) => ({
++        snapshotCommand: 'snapshot',
++        contentCommand: 'content',
++        args
++      }),
++      invoke: () =>
++        new Promise((resolve) => {
++          finish = resolve
++        })
++    })
++    const pending = sessions.open('window:1', 'demo.plugin', params)
++    sessions.revokeOwner('window:1')
++    finish(review)
++    await expect(pending).rejects.toThrow('unavailable')
++  })
++  it('rejects oversized content instead of interpreting it as an empty side', async () => {
++    const sessions = new PluginReviewSessions({
++      generation: () => 'one',
++      resolveProvider: (_p, _id, args) => ({
++        snapshotCommand: 'snapshot',
++        contentCommand: 'content',
++        args
++      }),
++      invoke: async (_p, command) =>
++        command === 'snapshot'
++          ? review
++          : {
++              original: { kind: 'text', content: 'x'.repeat(3 * 1024 * 1024) },
++              modified: { kind: 'absent' }
++            }
++    })
++    const opened = await sessions.open('w', 'demo.plugin', params)
++    await expect(sessions.read('w', opened.reviewId, 0)).rejects.toThrow()
++  })
++})
++
++it('does not resurrect a pending review after all sessions are cleared', async () => {
++  let finish: (value: unknown) => void = () => undefined
++  const sessions = new PluginReviewSessions({
++    generation: () => 'one',
++    resolveProvider: (_p, _id, args) => ({
++      snapshotCommand: 'snapshot',
++      contentCommand: 'content',
++      args
++    }),
++    invoke: () =>
++      new Promise((resolve) => {
++        finish = resolve
++      })
++  })
++  const pending = sessions.open('window:1', 'demo.plugin', params)
++  sessions.clear()
++  finish(review)
++  await expect(pending).rejects.toThrow('unavailable')
++})
+diff --git a/src/main/plugins/plugin-review-sessions.ts b/src/main/plugins/plugin-review-sessions.ts
+new file mode 100644
+index 00000000..beed1a66
+--- /dev/null
++++ b/src/main/plugins/plugin-review-sessions.ts
+@@ -0,0 +1,136 @@
++import { randomUUID } from 'node:crypto'
++import {
++  pluginReviewSchema,
++  pluginOpenReviewSchema,
++  pluginReviewContentsSchema,
++  type PluginReview,
++  type PluginOpenReviewInput,
++  type PluginOpenedReview,
++  type PluginReviewContents
++} from '../../shared/plugins/plugin-review-contract'
++
++type Session = {
++  owner: string
++  plugin: string
++  generation: string
++  review: PluginReview
++  command: string
++  pending: number
++}
++type Services = {
++  generation(plugin: string): string | null
++  resolveProvider(
++    plugin: string,
++    provider: string,
++    args: unknown
++  ): {
++    snapshotCommand: string
++    contentCommand: string
++    args: unknown
++  }
++  invoke(plugin: string, command: string, args: unknown): Promise<unknown>
++}
++
++export class PluginReviewSessions {
++  private readonly sessions = new Map<string, Session>()
++  private readonly owners = new Map<string, number>()
++  constructor(private readonly services: Services) {}
++
++  async open(
++    owner: string,
++    plugin: string,
++    input: PluginOpenReviewInput
++  ): Promise<PluginOpenedReview> {
++    const generation = this.services.generation(plugin)
++    if (!generation) {
++      throw new Error('Review unavailable')
++    }
++    const request = pluginOpenReviewSchema.parse(input)
++    const provider = this.services.resolveProvider(plugin, request.providerId, request.args)
++    const epoch = this.owners.get(owner) ?? 0
++    this.owners.set(owner, epoch)
++    const review = pluginReviewSchema.parse(
++      await this.services.invoke(plugin, provider.snapshotCommand, provider.args)
++    )
++    if (
++      epoch !== (this.owners.get(owner) ?? 0) ||
++      this.services.generation(plugin) !== generation
++    ) {
++      throw new Error('Review unavailable')
++    }
++    if ([...this.sessions.values()].filter((session) => session.owner === owner).length >= 10) {
++      throw new Error('Close an existing review first')
++    }
++    const reviewId = randomUUID()
++    this.sessions.set(reviewId, {
++      owner,
++      plugin,
++      generation,
++      review,
++      command: provider.contentCommand,
++      pending: 0
++    })
++    return { reviewId, review }
++  }
++
++  private resolve(owner: string, id: string): Session {
++    const session = this.sessions.get(id)
++    if (
++      !session ||
++      session.owner !== owner ||
++      this.services.generation(session.plugin) !== session.generation
++    ) {
++      throw new Error('Review unavailable')
++    }
++    return session
++  }
++
++  async read(owner: string, id: string, index: number): Promise<PluginReviewContents> {
++    const session = this.resolve(owner, id)
++    const file = Number.isInteger(index) && index >= 0 ? session.review.files[index] : undefined
++    if (!file) {
++      throw new Error('Unknown review file')
++    }
++    if (session.pending >= 4) {
++      throw new Error('Too many concurrent file requests')
++    }
++    session.pending++
++    try {
++      const contents = pluginReviewContentsSchema.parse(
++        await this.services.invoke(session.plugin, session.command, {
++          context: session.review.context,
++          file
++        })
++      )
++      if (this.resolve(owner, id) !== session) {
++        throw new Error('Review unavailable')
++      }
++      return contents
++    } finally {
++      session.pending--
++    }
++  }
++
++  close(owner: string, id: string): void {
++    if (this.sessions.get(id)?.owner === owner) {
++      this.sessions.delete(id)
++    }
++  }
++  revokeOwner(owner: string): void {
++    this.owners.set(owner, (this.owners.get(owner) ?? 0) + 1)
++    for (const [id, session] of this.sessions) {
++      if (session.owner === owner) {
++        this.sessions.delete(id)
++      }
++    }
++  }
++  clear(): void {
++    for (const owner of this.owners.keys()) {
++      this.revokeOwner(owner)
++    }
++    for (const session of this.sessions.values()) {
++      this.revokeOwner(session.owner)
++    }
++    this.sessions.clear()
++  }
++}
+diff --git a/src/main/plugins/plugin-service.ts b/src/main/plugins/plugin-service.ts
+index a924ac34..0c645dcb 100644
+--- a/src/main/plugins/plugin-service.ts
++++ b/src/main/plugins/plugin-service.ts
+@@ -1,3 +1,5 @@
++import { executeServiceHostCall } from './plugin-review-host'
++import { createPluginReviewIntegration } from './plugin-review-integration'
+ import type { PluginEventName } from '../../shared/plugins/plugin-manifest'
+ import {
+   capabilityKinds,
+@@ -18,9 +20,8 @@ import {
+ } from './plugin-discovery'
+ import { PluginEventBus } from './plugin-event-bus'
+ import { PluginAuditLog } from './plugin-audit-log'
+-import { executePluginHostCallRequest } from './plugin-host-call-adapter'
+ import { PluginContentVerifier } from './plugin-content-integrity'
+-import { bindPluginHostServices, type PluginRuntimeDelegate } from './plugin-host-service-bindings'
++import type { PluginRuntimeDelegate } from './plugin-host-service-bindings'
+ import { PluginPanelController } from './plugin-panel-controller'
+ import { PluginWorkerController } from './plugin-worker-controller'
+ import { PluginServiceHousekeeping } from './plugin-service-housekeeping'
+@@ -40,7 +41,11 @@ export type { PluginLogLine } from './plugin-log-buffer'
+ export type { PluginServiceOptions } from './plugin-service-options'
+ 
+ export class PluginService {
+-  readonly options: PluginServiceOptions
++  private readonly reviewIntegration = createPluginReviewIntegration(
++    (key) => this.approvedPlugin(key),
++    (key, command, args) => this.invokeCommand(key, command, args)
++  )
++  readonly reviews = this.reviewIntegration.reviews
+   private readonly registry = createPluginExtensionRegistry()
+   private readonly eventBus = new PluginEventBus()
+   private readonly audit: PluginAuditLog
+@@ -61,20 +66,17 @@ export class PluginService {
+     notifyChanged: () => this.notifyChanged(false)
+   })
+ 
+-  constructor(options: PluginServiceOptions) {
+-    this.options = options
++  constructor(readonly options: PluginServiceOptions) {
+     this.contentPacks = new PluginContentPackRegistry(this.contentVerifier, (pluginKey) =>
+       Boolean(this.options.getPluginKillListEntry?.(pluginKey))
+     )
+     this.audit = new PluginAuditLog(getPluginsDataDir(options.userDataPath))
+     this.panels = new PluginPanelController({
+-      resolveApprovedPlugin: (pluginKey) => {
+-        const plugin = this.findValidPlugin(pluginKey)
+-        return plugin && this.canStartPluginWork(plugin) ? plugin : null
+-      },
++      resolveApprovedPlugin: (key) => this.approvedPlugin(key),
+       contentVerifier: this.contentVerifier,
+-      executeHostCall: (pluginKey, method, params) =>
+-        this.executeHostCall(pluginKey, method, params, { viaPanel: true }),
++      executeHostCall: (pluginKey, method, params, ownerKey) =>
++        this.executeHostCall(pluginKey, method, params, { viaPanel: true, ownerKey }),
++      onRevokeOwner: (ownerKey) => this.reviews.revokeOwner(ownerKey),
+       log: (pluginKey) => this.installed.captureLog(pluginKey, 'error')
+     })
+     this.workerController = new PluginWorkerController({
+@@ -145,6 +147,7 @@ export class PluginService {
+       return
+     }
+     this.contentPacksReady = false
++    this.reviewIntegration.clear()
+     this.contentVerifier.clear()
+     if (!enabled) {
+       this.panels.revokeAll()
+@@ -198,7 +201,7 @@ export class PluginService {
+   activationState(plugin: ValidDiscoveredPlugin): ReturnType<typeof getPluginActivationState> {
+     // The feature flag is an authority boundary, not only a discovery hint:
+     // callers fail closed immediately even before async reconciliation ends.
+-    if (!this.options.isPluginSystemEnabled()) {
++    if (this.disposed || !this.options.isPluginSystemEnabled()) {
+       return 'disabled'
+     }
+     return getPluginActivationState(plugin.pluginKey, plugin.consentFingerprint, {
+@@ -207,6 +210,11 @@ export class PluginService {
+     })
+   }
+ 
++  private approvedPlugin(key: string): ValidDiscoveredPlugin | null {
++    const plugin = this.findValidPlugin(key)
++    return plugin && this.canStartPluginWork(plugin) ? plugin : null
++  }
++
+   private canStartPluginWork(plugin: ValidDiscoveredPlugin): boolean {
+     return !this.installed.isRemoving(plugin) && this.isRuntimeApproved(plugin)
+   }
+@@ -237,9 +245,9 @@ export class PluginService {
+    *  callers deny uniformly (no probe-able distinction). */
+   getGrantedCapabilities(pluginKey: string): PluginCapabilityKind[] | null {
+     const plugin = this.findValidPlugin(pluginKey)
+-    return plugin && this.isRuntimeApproved(plugin)
+-      ? capabilityKinds(plugin.manifest.capabilities)
+-      : null
++    // Existing workers retain cleanup capabilities while removal blocks new work.
++    const approved = plugin && this.isRuntimeApproved(plugin)
++    return approved ? capabilityKinds(plugin.manifest.capabilities) : null
+   }
+ 
+   /** Host API chokepoint for both transports (worker fork IPC + panel
+@@ -248,23 +256,15 @@ export class PluginService {
+     pluginKey: string,
+     method: string,
+     params: unknown,
+-    options: { viaPanel: boolean }
++    options: { viaPanel: boolean; ownerKey?: string }
+   ): Promise<PluginPanelActionOutcome> {
+-    return executePluginHostCallRequest({
+-      pluginKey,
+-      request: { method, params },
+-      viaPanel: options.viaPanel,
+-      resolvePolicy: (boundPluginKey) => ({
+-        grantedCapabilities: this.getGrantedCapabilities(boundPluginKey),
+-        services: this.runtimeDelegate
+-          ? bindPluginHostServices({
+-              delegate: this.runtimeDelegate,
+-              pluginsDataDir: getPluginsDataDir(this.options.userDataPath),
+-              subscribeEvents: (key, events) => this.eventBus.subscribe(key, events)
+-            })
+-          : null,
+-        audit: this.audit
+-      })
++    return executeServiceHostCall(pluginKey, method, params, options, {
++      delegate: this.runtimeDelegate,
++      pluginsDataDir: getPluginsDataDir(this.options.userDataPath),
++      eventBus: this.eventBus,
++      capabilities: (key) => this.getGrantedCapabilities(key),
++      ...this.reviewIntegration,
++      audit: this.audit
+     })
+   }
+ 
+@@ -316,6 +316,7 @@ export class PluginService {
+   }
+ 
+   private async performActivationStateReconciliation(): Promise<void> {
++    this.reviewIntegration.clear()
+     this.contentPacksReady = false
+     await this.contentPacks.reconcile(
+       this.installed.discovered,
+@@ -334,6 +335,7 @@ export class PluginService {
+     this.disposed = true
+     this.housekeeping.dispose()
+     this.panels.dispose()
++    this.reviewIntegration.clear()
+     await this.refreshChain.catch(() => undefined)
+     await this.workerController.dispose()
+     await this.audit.flush()
+diff --git a/src/preload/api/plugin-host-api.ts b/src/preload/api/plugin-host-api.ts
+index 49222ae7..ada9c0be 100644
+--- a/src/preload/api/plugin-host-api.ts
++++ b/src/preload/api/plugin-host-api.ts
+@@ -1,3 +1,4 @@
++import type { PluginReviewContents } from '../../shared/plugins/plugin-review-contract'
+ import type {
+   PluginPanelActionOutcome,
+   PluginPanelEntry
+@@ -141,6 +142,8 @@ export type PluginMarketplaceHostInstallPreview = {
+ }
+ 
+ export type PluginsApi = {
++  readReviewFile?: (args: { reviewId: string; index: number }) => Promise<PluginReviewContents>
++  closeReview?: (args: { reviewId: string }) => Promise<void>
+   list: () => Promise<PluginHostListEntry[]>
+   listLanguagePacks: () => Promise<PluginLanguagePackRegistration[]>
+   /** Records the consent-dialog answer; approval is keyed to the plugin's
+diff --git a/src/preload/api/plugins-bridge.ts b/src/preload/api/plugins-bridge.ts
+index 0e529e74..6070dd19 100644
+--- a/src/preload/api/plugins-bridge.ts
++++ b/src/preload/api/plugins-bridge.ts
+@@ -14,6 +14,9 @@ import type {
+ } from '../api-types'
+ 
+ export const pluginsApi = {
++  readReviewFile: (args: { reviewId: string; index: number }) =>
++    ipcRenderer.invoke('plugins:readReviewFile', args),
++  closeReview: (args: { reviewId: string }) => ipcRenderer.invoke('plugins:closeReview', args),
+   list: (): Promise<PluginHostListEntry[]> => ipcRenderer.invoke('plugins:list'),
+   listLanguagePacks: () => ipcRenderer.invoke('plugins:listLanguagePacks'),
+   consent: (args: PluginConsentRequest): Promise<PluginHostListEntry[]> =>
+diff --git a/src/renderer/src/components/editor/DiffViewer.tsx b/src/renderer/src/components/editor/DiffViewer.tsx
+index 77610151..0aacdf43 100644
+--- a/src/renderer/src/components/editor/DiffViewer.tsx
++++ b/src/renderer/src/components/editor/DiffViewer.tsx
+@@ -43,6 +43,7 @@ export default function DiffViewer({
+   relativePath,
+   sideBySide,
+   editable,
++  keepModels = true,
+   worktreeId,
+   onAddLineComment,
+   commentableLineNumbers,
+@@ -299,12 +300,20 @@ export default function DiffViewer({
+       const de = diffEditorRef.current
+       if (de) {
+         const currentViewState = de.saveViewState()
+-        if (currentViewState) {
++        if (currentViewState && keepModels) {
+           setWithLRU(diffViewStateCache, modelKey, currentViewState)
+         }
++        if (!keepModels) {
++          // Detach before disposing: Monaco's diff widget still observes both
++          // models until reset, and the React wrapper otherwise disposes first.
++          const models = de.getModel()
++          de.setModel(null)
++          models?.original.dispose()
++          models?.modified.dispose()
++        }
+       }
+     }
+-  }, [modelKey])
++  }, [modelKey, keepModels])
+ 
+   useEffect(() => {
+     const diffEditor = diffEditorRef.current
+@@ -359,8 +368,8 @@ export default function DiffViewer({
+             // Why: key models by tab identity and preserve the modified undo stack across Changes-mode HEAD rotations.
+             originalModelPath={currentDiffModelPaths.originalModelPath}
+             modifiedModelPath={currentDiffModelPaths.modifiedModelPath}
+-            keepCurrentOriginalModel
+-            keepCurrentModifiedModel
++            keepCurrentOriginalModel={keepModels}
++            keepCurrentModifiedModel={keepModels}
+             options={{
+               readOnly: !editable,
+               originalEditable: false,
+diff --git a/src/renderer/src/components/editor/diff-viewer-props.ts b/src/renderer/src/components/editor/diff-viewer-props.ts
+index 12be38d9..e31b2804 100644
+--- a/src/renderer/src/components/editor/diff-viewer-props.ts
++++ b/src/renderer/src/components/editor/diff-viewer-props.ts
+@@ -11,6 +11,7 @@ export type DiffViewerProps = {
+   relativePath: string
+   sideBySide: boolean
+   editable?: boolean
++  keepModels?: boolean
+   // Why: optional because DiffViewer is also used by GitHubItemDialog for PR
+   // review, where there is no local worktree to attach comments to.
+   worktreeId?: string
+diff --git a/src/renderer/src/components/external-review/external-review-dialog.tsx b/src/renderer/src/components/external-review/external-review-dialog.tsx
+new file mode 100644
+index 00000000..390588cd
+--- /dev/null
++++ b/src/renderer/src/components/external-review/external-review-dialog.tsx
+@@ -0,0 +1,162 @@
++import React, { useEffect, useState } from 'react'
++import type {
++  PluginOpenedReview,
++  PluginReviewContents
++} from '../../../../shared/plugins/plugin-review-contract'
++import { pluginReviewContentsSchema } from '../../../../shared/plugins/plugin-review-contract'
++import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog'
++import { Button } from '@/components/ui/button'
++import DiffViewer from '../editor/DiffViewer'
++import { DiffNavigationProvider } from '../editor/diff-navigation-context'
++import { detectLanguage } from '@/lib/language-detect'
++
++type Props = { opened: PluginOpenedReview; onClose(): void }
++export function ExternalReviewDialog({ opened, onClose }: Props): React.JSX.Element {
++  const [index, setIndex] = useState(0)
++  const [sideBySide, setSideBySide] = useState(true)
++  const [contents, setContents] = useState<PluginReviewContents | null>(null)
++  const [error, setError] = useState<string | null>(null)
++  const [retry, setRetry] = useState(0)
++  const file = opened.review.files[index]
++  useEffect(() => {
++    let active = true
++    setContents(null)
++    setError(null)
++    if (!file) {
++      return
++    }
++    const read = window.api.plugins.readReviewFile
++    if (!read) {
++      setError('Native plugin reviews require an updated desktop host.')
++      return
++    }
++    void read({ reviewId: opened.reviewId, index })
++      .then((value) => {
++        if (active) {
++          setContents(pluginReviewContentsSchema.parse(value))
++        }
++      })
++      .catch((cause) => {
++        if (active) {
++          setError(cause instanceof Error ? cause.message : 'File unavailable')
++        }
++      })
++    return () => {
++      active = false
++    }
++  }, [opened.reviewId, index, file, retry])
++  useEffect(
++    () => () => {
++      void window.api.plugins.closeReview?.({ reviewId: opened.reviewId }).catch(() => undefined)
++    },
++    [opened.reviewId]
++  )
++  const renderable =
++    contents &&
++    ['text', 'absent'].includes(contents.original.kind) &&
++    ['text', 'absent'].includes(contents.modified.kind)
++  return (
++    <Dialog
++      open
++      onOpenChange={(open) => {
++        if (!open) {
++          onClose()
++        }
++      }}
++    >
++      <DialogContent className="flex h-[85vh] max-w-[95vw] flex-col sm:max-w-[95vw]">
++        <DialogTitle>{opened.review.title}</DialogTitle>
++        <DialogDescription>Read-only snapshot · {opened.review.revision}</DialogDescription>
++        <div className="flex items-center gap-2">
++          <Button variant="outline" size="sm" onClick={() => setSideBySide((value) => !value)}>
++            {sideBySide ? 'Unified view' : 'Side-by-side view'}
++          </Button>
++          <Button
++            variant="ghost"
++            size="sm"
++            disabled={index === 0}
++            onClick={() => setIndex((value) => value - 1)}
++          >
++            Previous file
++          </Button>
++          <Button
++            variant="ghost"
++            size="sm"
++            disabled={index >= opened.review.files.length - 1}
++            onClick={() => setIndex((value) => value + 1)}
++          >
++            Next file
++          </Button>
++        </div>
++        <div className="flex min-h-0 flex-1 gap-4">
++          <nav
++            aria-label="Changed files"
++            className="w-64 shrink-0 overflow-auto scrollbar-sleek border-r pr-2"
++          >
++            {opened.review.files.map((entry, position) => (
++              <Button
++                key={entry.path}
++                variant="ghost"
++                size="sm"
++                className="w-full justify-start"
++                aria-current={position === index ? 'true' : undefined}
++                onClick={() => setIndex(position)}
++                title={`${entry.status}: ${entry.oldPath ? `${entry.oldPath} → ` : ''}${entry.path}`}
++              >
++                <span className="truncate">
++                  {entry.path} (+{entry.additions} −{entry.deletions})
++                </span>
++              </Button>
++            ))}
++          </nav>
++          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
++            {!file ? (
++              <p>No changed files.</p>
++            ) : error ? (
++              <div role="alert">
++                <p>{error}</p>
++                <Button variant="outline" onClick={() => setRetry((value) => value + 1)}>
++                  Retry
++                </Button>
++              </div>
++            ) : !contents ? (
++              <p role="status">Loading file…</p>
++            ) : renderable ? (
++              <DiffNavigationProvider>
++                <DiffViewer
++                  key={`${opened.reviewId}:${index}:${retry}`}
++                  modelKey={`plugin-review:${opened.reviewId}:${index}:${retry}`}
++                  originalContent={
++                    contents.original.kind === 'text' ? contents.original.content : ''
++                  }
++                  modifiedContent={
++                    contents.modified.kind === 'text' ? contents.modified.content : ''
++                  }
++                  filePath={file.path}
++                  relativePath={file.path}
++                  language={detectLanguage(file.path)}
++                  sideBySide={sideBySide}
++                  editable={false}
++                  keepModels={false}
++                />
++              </DiffNavigationProvider>
++            ) : (
++              <div role="status">
++                {(['original', 'modified'] as const).map((side) => (
++                  <p key={side}>
++                    {side}: {contents[side].kind}
++                    {contents[side].kind === 'error'
++                      ? ` — ${contents[side].message}`
++                      : contents[side].kind === 'limited'
++                        ? ` — ${contents[side].reason}`
++                        : ''}
++                  </p>
++                ))}
++              </div>
++            )}
++          </div>
++        </div>
++      </DialogContent>
++    </Dialog>
++  )
++}
+diff --git a/src/renderer/src/components/right-sidebar/PluginPanel.tsx b/src/renderer/src/components/right-sidebar/PluginPanel.tsx
+index b8c8ee87..b6d20cff 100644
+--- a/src/renderer/src/components/right-sidebar/PluginPanel.tsx
++++ b/src/renderer/src/components/right-sidebar/PluginPanel.tsx
+@@ -1,3 +1,5 @@
++import { ExternalReviewDialog } from '../external-review/external-review-dialog'
++import type { PluginOpenedReview } from '../../../../shared/plugins/plugin-review-contract'
+ import React, { useEffect, useMemo, useRef, useState } from 'react'
+ import { isPluginPanelTabKey } from '../../../../shared/plugins/plugin-manifest'
+ import {
+@@ -46,6 +48,7 @@ function fillPanelShell(html: string): string {
+ }
+ 
+ function PluginPanel({ tabKey }: PluginPanelProps): React.JSX.Element {
++  const [openedReview, setOpenedReview] = useState<PluginOpenedReview | null>(null)
+   const panels = usePluginPanels()
+   const setPanelHealth = usePluginPanelsStore((state) => state.setPanelHealth)
+   const panel = isPluginPanelTabKey(tabKey)
+@@ -87,6 +90,7 @@ function PluginPanel({ tabKey }: PluginPanelProps): React.JSX.Element {
+     let active = true
+     const handler = createPanelBridgeMessageHandler({
+       sessionToken,
++      onOpenReview: setOpenedReview,
+       getPanelWindow: () => iframeRef.current?.contentWindow ?? null,
+       callPanelAction: callPanelActionViaPreload,
+       isActive: () => active,
+@@ -217,19 +221,28 @@ function PluginPanel({ tabKey }: PluginPanelProps): React.JSX.Element {
+   }
+ 
+   return (
+-    <iframe
+-      key={panelFrameKey}
+-      ref={iframeRef}
+-      // SECURITY: never add allow-same-origin — the srcdoc frame must stay an
+-      // opaque origin so plugin UI cannot reach the app DOM, storage, or IPC.
+-      // The srcdoc itself is the host CSP shell wrapped around plugin HTML.
+-      sandbox="allow-scripts"
+-      name={`${PLUGIN_PANEL_FRAME_NAME_PREFIX}${tabKey}`}
+-      srcDoc={panelDocument ?? ''}
+-      onLoad={() => setLoadedFrameKey(panelFrameKey)}
+-      title={panel.title}
+-      className="h-full w-full flex-1 border-0 bg-background"
+-    />
++    <>
++      {openedReview && (
++        <ExternalReviewDialog
++          key={openedReview.reviewId}
++          opened={openedReview}
++          onClose={() => setOpenedReview(null)}
++        />
++      )}
++      <iframe
++        key={panelFrameKey}
++        ref={iframeRef}
++        // SECURITY: never add allow-same-origin — the srcdoc frame must stay an
++        // opaque origin so plugin UI cannot reach the app DOM, storage, or IPC.
++        // The srcdoc itself is the host CSP shell wrapped around plugin HTML.
++        sandbox="allow-scripts"
++        name={`${PLUGIN_PANEL_FRAME_NAME_PREFIX}${tabKey}`}
++        srcDoc={panelDocument ?? ''}
++        onLoad={() => setLoadedFrameKey(panelFrameKey)}
++        title={panel.title}
++        className="h-full w-full flex-1 border-0 bg-background"
++      />
++    </>
+   )
+ }
+ 
+diff --git a/src/renderer/src/components/right-sidebar/plugin-panel-bridge-host.test.ts b/src/renderer/src/components/right-sidebar/plugin-panel-bridge-host.test.ts
+index 1862bfee..595b08bd 100644
+--- a/src/renderer/src/components/right-sidebar/plugin-panel-bridge-host.test.ts
++++ b/src/renderer/src/components/right-sidebar/plugin-panel-bridge-host.test.ts
+@@ -328,3 +328,46 @@ describe('createPanelBridgeMessageHandler', () => {
+     expect(onPong).not.toHaveBeenCalled()
+   })
+ })
++
++describe('native plugin review handoff', () => {
++  it('keeps snapshot files and provider context in the host and returns only a handle and revision', async () => {
++    const panelWindow = createFakePanelWindow()
++    const onOpenReview = vi.fn()
++    const opened = {
++      reviewId: '624f6be0-703d-47c1-8afb-2f0116ca4bba',
++      review: {
++        title: 'PR',
++        revision: 'sha',
++        context: { private: true },
++        files: [{ path: 'hello.ts', status: 'modified', additions: 1, deletions: 1 }]
++      }
++    }
++    const handler = createPanelBridgeMessageHandler({
++      sessionToken: SESSION_TOKEN,
++      getPanelWindow: () => panelWindow,
++      onOpenReview,
++      callPanelAction: async () => ({ ok: true, value: opened })
++    })
++    handler(
++      messageEvent(
++        {
++          ...VALID_DATA,
++          action: 'diffs.openReview',
++          params: { providerId: 'pull-request', args: {} }
++        },
++        panelWindow
++      )
++    )
++    await flush()
++    expect(onOpenReview).toHaveBeenCalledWith(opened)
++    expect(panelWindow.postMessage).toHaveBeenCalledWith(
++      {
++        type: 'orca-panel-action-result',
++        requestId: 'req-1',
++        ok: true,
++        value: { reviewId: opened.reviewId, revision: 'sha' }
++      },
++      '*'
++    )
++  })
++})
+diff --git a/src/renderer/src/components/right-sidebar/plugin-panel-bridge-host.ts b/src/renderer/src/components/right-sidebar/plugin-panel-bridge-host.ts
+index 4e9d70d4..e086376a 100644
+--- a/src/renderer/src/components/right-sidebar/plugin-panel-bridge-host.ts
++++ b/src/renderer/src/components/right-sidebar/plugin-panel-bridge-host.ts
+@@ -1,3 +1,7 @@
++import {
++  pluginOpenedReviewSchema,
++  type PluginOpenedReview
++} from '../../../../shared/plugins/plugin-review-contract'
+ import {
+   PANEL_ACTION_RESULT_TYPE,
+   PANEL_CONTROL_MESSAGE_MAX_BYTES,
+@@ -33,6 +37,7 @@ export type PanelActionCall = {
+ 
+ export type PanelBridgeHostOptions = {
+   sessionToken: string
++  onOpenReview?: (review: PluginOpenedReview) => void
+   /** The mounted panel iframe's contentWindow, or null when unmounted. */
+   getPanelWindow: () => Window | null
+   callPanelAction: (call: PanelActionCall) => Promise<PluginPanelActionOutcome>
+@@ -158,6 +163,25 @@ export function createPanelBridgeMessageHandler(
+     options
+       .callPanelAction({ sessionToken: options.sessionToken, action, params })
+       .then((outcome) => {
++        if (outcome.ok && action === 'diffs.openReview') {
++          const opened = pluginOpenedReviewSchema.parse(outcome.value)
++          if (
++            options.isActive?.() === false ||
++            options.getPanelWindow() !== requestingWindow ||
++            !options.onOpenReview
++          ) {
++            void window.api?.plugins?.closeReview?.({ reviewId: opened.reviewId })
++            return
++          }
++          options.onOpenReview(opened)
++          respond({
++            type: PANEL_ACTION_RESULT_TYPE,
++            requestId,
++            ok: true,
++            value: { reviewId: opened.reviewId, revision: opened.review.revision }
++          })
++          return
++        }
+         respond(
+           outcome.ok
+             ? { type: PANEL_ACTION_RESULT_TYPE, requestId, ok: true, value: outcome.value }
+diff --git a/src/shared/plugins/plugin-browser-contract.test.ts b/src/shared/plugins/plugin-browser-contract.test.ts
+new file mode 100644
+index 00000000..747649bc
+--- /dev/null
++++ b/src/shared/plugins/plugin-browser-contract.test.ts
+@@ -0,0 +1,54 @@
++import { describe, expect, it } from 'vitest'
++import {
++  pluginWebUrlSchema,
++  pluginAuthorizationHandleSchema,
++  pluginCreateAuthorizationSchema
++} from './plugin-browser-contract'
++import { getPluginHostMethodSpec } from './plugin-host-api'
++
++describe('browser authorization contract', () => {
++  it('rejects malformed server origins without throwing', () => {
++    for (const serverOrigin of ['bad', 'https://hub.example/device', 'https://hub.example/']) {
++      expect(
++        pluginCreateAuthorizationSchema.safeParse({
++          serverOrigin,
++          verificationUrl: 'https://hub.example/device',
++          expiresIn: 600
++        }).success
++      ).toBe(false)
++    }
++  })
++  it('accepts https pages and http only on loopback', () => {
++    for (const url of [
++      'https://hub.example/device?code=WDJB-MJHT',
++      'http://localhost:5174/device',
++      'http://127.0.0.1:5174/device'
++    ]) {
++      expect(pluginWebUrlSchema.safeParse(url).success).toBe(true)
++    }
++  })
++  it('rejects executable schemes, plain http, credentials and extra fields', () => {
++    for (const params of [
++      { url: 'javascript:alert(1)' },
++      { url: 'file:///etc/passwd' },
++      { url: 'http://hub.example/device' },
++      { url: 'https://user:pass@hub.example/device' },
++      { url: 'not a url' }
++    ]) {
++      expect(pluginWebUrlSchema.safeParse(params.url).success).toBe(false)
++    }
++  })
++  it('is worker-only and gated by its own capability', () => {
++    for (const method of ['createAuthorization', 'openAuthorization', 'cancelAuthorization']) {
++      const spec = getPluginHostMethodSpec(`browser.${method}`)
++      expect(spec?.panel).toBe(false)
++      expect(spec?.capability).toBe('browser:authorize')
++    }
++    expect(
++      pluginAuthorizationHandleSchema.safeParse({
++        attemptId: '00000000-0000-4000-8000-000000000001',
++        url: 'https://evil.example'
++      }).success
++    ).toBe(false)
++  })
++})
+diff --git a/src/shared/plugins/plugin-browser-contract.ts b/src/shared/plugins/plugin-browser-contract.ts
+new file mode 100644
+index 00000000..ae224482
+--- /dev/null
++++ b/src/shared/plugins/plugin-browser-contract.ts
+@@ -0,0 +1,40 @@
++import { z } from 'zod'
++
++const loopback = new Set(['localhost', '127.0.0.1', '[::1]'])
++export const pluginWebUrlSchema = z
++  .string()
++  .min(1)
++  .max(2048)
++  .refine((value) => {
++    try {
++      const url = new URL(value)
++      return (
++        !url.username &&
++        !url.password &&
++        (url.protocol === 'https:' || (url.protocol === 'http:' && loopback.has(url.hostname)))
++      )
++    } catch {
++      return false
++    }
++  }, 'HTTPS or loopback HTTP without credentials required')
++
++export const pluginCreateAuthorizationSchema = z
++  .object({
++    serverOrigin: pluginWebUrlSchema.refine((value) => {
++      try {
++        return new URL(value).origin === value
++      } catch {
++        return false
++      }
++    }, 'serverOrigin must be an origin'),
++    verificationUrl: pluginWebUrlSchema,
++    expiresIn: z.number().int().min(1).max(900)
++  })
++  .strict()
++export const pluginAuthorizationHandleSchema = z.object({ attemptId: z.string().uuid() }).strict()
++export const pluginCreatedAuthorizationSchema = pluginAuthorizationHandleSchema
++  .extend({ expiresAt: z.number().int() })
++  .strict()
++export const pluginOpenedAuthorizationSchema = z.object({ opened: z.boolean() }).strict()
++export const pluginCanceledAuthorizationSchema = z.object({ ok: z.literal(true) }).strict()
++export type PluginCreateAuthorization = z.infer<typeof pluginCreateAuthorizationSchema>
+diff --git a/src/shared/plugins/plugin-capabilities.ts b/src/shared/plugins/plugin-capabilities.ts
+index 7f6f04c0..26c03340 100644
+--- a/src/shared/plugins/plugin-capabilities.ts
++++ b/src/shared/plugins/plugin-capabilities.ts
+@@ -13,6 +13,9 @@ import { z } from 'zod'
+  */
+ 
+ export const PLUGIN_CAPABILITY_KINDS = [
++  'commands:invoke-own',
++  'diffs:open',
++  'browser:authorize',
+   'workspace:read',
+   'terminal:send',
+   'notifications:show',
+@@ -33,6 +36,10 @@ export type PluginCapability = z.infer<typeof pluginCapabilitySchema>
+ /** Plain-language consent copy per capability. Shown verbatim in the install
+  *  preview / consent dialog; keep each line honest about what is enforced. */
+ export const PLUGIN_CAPABILITY_DESCRIPTIONS: Record<PluginCapabilityKind, string> = {
++  'commands:invoke-own': 'Run this plugin’s own commands from its panel',
++  'diffs:open': 'Open read-only native reviews supplied by this plugin',
++  'browser:authorize':
++    'Request browser sign-in after confirmation in Orca (HTTPS, or loopback development)',
+   'workspace:read': 'Read the name, branch, and terminal list of your focused worktree',
+   'terminal:send': 'Type text into a terminal you can see (always a specific terminal)',
+   'notifications:show': 'Show desktop notifications labeled with the plugin name',
+diff --git a/src/shared/plugins/plugin-consent-fingerprint.ts b/src/shared/plugins/plugin-consent-fingerprint.ts
+index af958d3a..c9d5b10c 100644
+--- a/src/shared/plugins/plugin-consent-fingerprint.ts
++++ b/src/shared/plugins/plugin-consent-fingerprint.ts
+@@ -3,7 +3,12 @@ import { canonicalizeCapabilitySet } from './plugin-capabilities'
+ import type { PluginManifest } from './plugin-manifest'
+ 
+ type PluginConsentSubject = Pick<PluginManifest, 'capabilities' | 'main'> & {
+-  contributes?: Partial<Pick<PluginManifest['contributes'], 'keybindings' | 'vmRecipes' | 'agents'>>
++  contributes?: Partial<
++    Pick<
++      PluginManifest['contributes'],
++      'keybindings' | 'vmRecipes' | 'agents' | 'commands' | 'reviewProviders'
++    >
++  >
+ }
+ 
+ export function hasInstructionalPluginContributions(manifest: PluginConsentSubject): boolean {
+@@ -32,7 +37,22 @@ export function canonicalizePluginConsent(
+   const instructionalIdentity = hasInstructionalPluginContributions(manifest)
+     ? `\0instructional-content:${contentIdentity ?? 'unresolved'}`
+     : ''
+-  return `${capabilities}${workerIdentity}${instructionalIdentity}`
++  const panelCommands = (manifest.contributes?.commands ?? [])
++    .filter((command) => command.panel)
++    .map(({ id, panel }) => ({ id, panel }))
++    .sort((a, b) => a.id.localeCompare(b.id))
++  const reviewProviders = [...(manifest.contributes?.reviewProviders ?? [])].sort((a, b) =>
++    a.id.localeCompare(b.id)
++  )
++  const panelAuthority =
++    panelCommands.length || reviewProviders.length
++      ? `\0panel-authority:${JSON.stringify({ panelCommands, reviewProviders }, (_key, value) =>
++          value && typeof value === 'object' && !Array.isArray(value)
++            ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)))
++            : value
++        )}`
++      : ''
++  return `${capabilities}${workerIdentity}${instructionalIdentity}${panelAuthority}`
+ }
+ 
+ export function fingerprintPluginConsent(
+diff --git a/src/shared/plugins/plugin-data-schema.test.ts b/src/shared/plugins/plugin-data-schema.test.ts
+new file mode 100644
+index 00000000..6f50b7d8
+--- /dev/null
++++ b/src/shared/plugins/plugin-data-schema.test.ts
+@@ -0,0 +1,52 @@
++import { expect, it } from 'vitest'
++import { compilePluginDataSchema, pluginDataSchema } from './plugin-data-schema'
++
++it('rejects unbounded object keys, refs, reserved properties, and excessive schema depth', () => {
++  for (const schema of [
++    { type: 'object', additionalProperties: true },
++    { $ref: 'https://evil.example/schema' },
++    { type: 'string', pattern: '(a+)+$' },
++    {
++      type: 'object',
++      properties: { constructor: { type: 'string' } },
++      additionalProperties: false
++    },
++    { type: 'object', required: ['missing'], additionalProperties: false }
++  ]) {
++    expect(pluginDataSchema.safeParse(schema).success).toBe(false)
++  }
++  let deep: unknown = { type: 'string' }
++  for (let i = 0; i < 10; i++) {
++    deep = { type: 'array', items: deep }
++  }
++  expect(pluginDataSchema.safeParse(deep).success).toBe(false)
++})
++
++it('enforces required values, types, bounds and exact output fields without coercion', () => {
++  const schema = compilePluginDataSchema({
++    type: 'object',
++    additionalProperties: false,
++    required: ['number', 'state'],
++    properties: {
++      number: { type: 'integer', minimum: 1, maximum: 10 },
++      state: { type: 'string', enum: ['open', 'closed'], maxLength: 6 },
++      paths: { type: 'array', maxItems: 1, items: { type: 'string', maxLength: 8 } }
++    }
++  })
++  expect(schema.parse({ number: 1, state: 'open' })).toEqual({ number: 1, state: 'open' })
++  for (const value of [
++    {},
++    { number: '1', state: 'open' },
++    { number: 11, state: 'open' },
++    { number: 1, state: 'bad' },
++    { number: 1, state: 'open', token: 'secret' },
++    { number: 1, state: 'open', paths: ['a', 'b'] }
++  ]) {
++    expect(schema.safeParse(value).success).toBe(false)
++  }
++})
++
++it('rejects schema keywords that would otherwise be silently ignored for a type', () => {
++  expect(pluginDataSchema.safeParse({ type: 'number', enum: ['secret'] }).success).toBe(false)
++  expect(pluginDataSchema.safeParse({ type: 'boolean', properties: {} }).success).toBe(false)
++})
+diff --git a/src/shared/plugins/plugin-data-schema.ts b/src/shared/plugins/plugin-data-schema.ts
+new file mode 100644
+index 00000000..f3fe5784
+--- /dev/null
++++ b/src/shared/plugins/plugin-data-schema.ts
+@@ -0,0 +1,110 @@
++import { z } from 'zod'
++
++const definitionSchema = z
++  .object({
++    type: z.enum(['object', 'array', 'string', 'number', 'integer', 'boolean', 'null']),
++    properties: z.record(z.string(), z.unknown()).optional(),
++    required: z.array(z.string()).max(64).optional(),
++    additionalProperties: z.literal(false).optional(),
++    items: z.unknown().optional(),
++    maxItems: z.number().int().min(0).max(2000).optional(),
++    minLength: z.number().int().min(0).max(49152).optional(),
++    maxLength: z.number().int().min(0).max(49152).optional(),
++    minimum: z.number().finite().optional(),
++    maximum: z.number().finite().optional(),
++    enum: z.array(z.string().max(512)).min(1).max(64).optional(),
++    nullable: z.boolean().optional()
++  })
++  .strict()
++
++/** Deliberately small, bounded schema dialect: no refs, code, regexes or coercion. */
++export function compilePluginDataSchema(input: unknown, depth = 0): z.ZodType {
++  if (depth > 8) {
++    throw new Error('schema nesting exceeds eight levels')
++  }
++  const d = definitionSchema.parse(input)
++  const keywords = {
++    object: ['properties', 'required', 'additionalProperties'],
++    array: ['items', 'maxItems'],
++    string: ['minLength', 'maxLength', 'enum'],
++    number: ['minimum', 'maximum'],
++    integer: ['minimum', 'maximum'],
++    boolean: [],
++    null: []
++  }
++  const allowed = new Set(['type', 'nullable', ...keywords[d.type]])
++  if (Object.keys(d).some((key) => !allowed.has(key))) {
++    throw new Error('keyword does not apply to schema type')
++  }
++  let result: z.ZodType
++  switch (d.type) {
++    case 'object': {
++      if (d.additionalProperties !== false) {
++        throw new Error('objects must reject additional properties')
++      }
++      const properties = Object.entries(d.properties ?? {})
++      if (properties.length > 64) {
++        throw new Error('too many object properties')
++      }
++      const required = new Set(d.required ?? [])
++      if ([...required].some((key) => !Object.hasOwn(d.properties ?? {}, key))) {
++        throw new Error('unknown required property')
++      }
++      const fields: Record<string, z.ZodType> = {}
++      for (const [key, value] of properties) {
++        if (['__proto__', 'constructor', 'prototype'].includes(key)) {
++          throw new Error('reserved property')
++        }
++        const field = compilePluginDataSchema(value, depth + 1)
++        fields[key] = required.has(key) ? field : field.optional()
++      }
++      result = z.object(fields).strict()
++      break
++    }
++    case 'array':
++      result = z.array(compilePluginDataSchema(d.items, depth + 1)).max(d.maxItems ?? 2000)
++      break
++    case 'string': {
++      let value = z
++        .string()
++        .min(d.minLength ?? 0)
++        .max(d.maxLength ?? 49152)
++      if (d.enum) {
++        value = value.refine((text) => d.enum!.includes(text))
++      }
++      result = value
++      break
++    }
++    case 'number':
++    case 'integer': {
++      let value = d.type === 'integer' ? z.number().int() : z.number().finite()
++      if (d.minimum !== undefined) {
++        value = value.min(d.minimum)
++      }
++      if (d.maximum !== undefined) {
++        value = value.max(d.maximum)
++      }
++      result = value
++      break
++    }
++    case 'boolean':
++      result = z.boolean()
++      break
++    case 'null':
++      result = z.null()
++      break
++  }
++  return d.nullable ? result.nullable() : result
++}
++
++export const pluginDataSchema = z.json().superRefine((value, ctx) => {
++  if (JSON.stringify(value).length > 16384) {
++    ctx.addIssue({ code: 'custom', message: 'schema exceeds 16 KiB' })
++    return
++  }
++  try {
++    compilePluginDataSchema(value)
++  } catch {
++    ctx.addIssue({ code: 'custom', message: 'invalid bounded data schema' })
++  }
++})
+diff --git a/src/shared/plugins/plugin-host-api.ts b/src/shared/plugins/plugin-host-api.ts
+index b4f6fc41..59a5d991 100644
+--- a/src/shared/plugins/plugin-host-api.ts
++++ b/src/shared/plugins/plugin-host-api.ts
+@@ -1,4 +1,17 @@
++import {
++  pluginCreateAuthorizationSchema,
++  pluginAuthorizationHandleSchema,
++  pluginCreatedAuthorizationSchema,
++  pluginOpenedAuthorizationSchema,
++  pluginCanceledAuthorizationSchema
++} from './plugin-browser-contract'
+ import { z } from 'zod'
++import {
++  pluginOwnCommandSchema,
++  pluginOpenReviewSchema,
++  pluginCommandResultSchema,
++  pluginOpenedReviewSchema
++} from './plugin-review-contract'
+ import { PLUGIN_EVENT_NAMES } from './plugin-manifest'
+ import type { PluginCapabilityKind } from './plugin-capabilities'
+ 
+@@ -120,6 +133,56 @@ const spec = <P extends z.ZodTypeAny, R extends z.ZodTypeAny>(
+ ): PluginHostMethodSpec => ({ ...entry, stability: 'experimental' })
+ 
+ export const PLUGIN_HOST_API_V0: readonly PluginHostMethodSpec[] = [
++  spec({
++    name: 'commands.invokeOwn',
++    since: '1.1',
++    scope: 'plugin-private',
++    capability: 'commands:invoke-own',
++    mutation: true,
++    panel: true,
++    params: pluginOwnCommandSchema,
++    result: pluginCommandResultSchema
++  }),
++  spec({
++    name: 'diffs.openReview',
++    since: '1.1',
++    scope: 'plugin-private',
++    capability: 'diffs:open',
++    mutation: true,
++    panel: true,
++    params: pluginOpenReviewSchema,
++    result: pluginOpenedReviewSchema
++  }),
++  spec({
++    name: 'browser.createAuthorization',
++    since: '1.2',
++    scope: 'desktop',
++    capability: 'browser:authorize',
++    mutation: true,
++    panel: false,
++    params: pluginCreateAuthorizationSchema,
++    result: pluginCreatedAuthorizationSchema
++  }),
++  spec({
++    name: 'browser.openAuthorization',
++    since: '1.2',
++    scope: 'desktop',
++    capability: 'browser:authorize',
++    mutation: true,
++    panel: false,
++    params: pluginAuthorizationHandleSchema,
++    result: pluginOpenedAuthorizationSchema
++  }),
++  spec({
++    name: 'browser.cancelAuthorization',
++    since: '1.2',
++    scope: 'desktop',
++    capability: 'browser:authorize',
++    mutation: true,
++    panel: false,
++    params: pluginAuthorizationHandleSchema,
++    result: pluginCanceledAuthorizationSchema
++  }),
+   spec({
+     name: 'workspace.readContext',
+     since: '1.0',
+diff --git a/src/shared/plugins/plugin-manifest-contribution-validation.ts b/src/shared/plugins/plugin-manifest-contribution-validation.ts
+index 3c060482..22d5b15e 100644
+--- a/src/shared/plugins/plugin-manifest-contribution-validation.ts
++++ b/src/shared/plugins/plugin-manifest-contribution-validation.ts
+@@ -1,3 +1,5 @@
++import { validatePluginPanelContributions } from './plugin-panel-contribution-validation'
++import type { PluginReviewProvider } from './plugin-panel-contributions'
+ import type { RefinementCtx } from 'zod'
+ import { isPluginCommandAliasActionId } from './plugin-command-actions'
+ import { getKeybindingConflictIdentity } from '../keybindings'
+@@ -9,7 +11,12 @@ type ContributionValidationManifest = {
+   main?: string
+   contributes: {
+     panels: IdentifiedContribution[]
+-    commands: (IdentifiedContribution & { action?: string; context?: 'global' | 'worktree' })[]
++    commands: (IdentifiedContribution & {
++      action?: string
++      panel?: unknown
++      context?: 'global' | 'worktree'
++    })[]
++    reviewProviders?: PluginReviewProvider[]
+     events: { on: string }[]
+     languagePacks: { locale: string }[]
+     keybindings: { command: string; key: string; when?: 'global' | 'worktree' }[]
+@@ -44,6 +51,7 @@ export function validatePluginManifestContributions(
+   manifest: ContributionValidationManifest,
+   ctx: RefinementCtx
+ ): void {
++  validatePluginPanelContributions(manifest, ctx)
+   for (const path of ['panels', 'commands'] as const) {
+     rejectDuplicateValues(
+       manifest.contributes[path],
+diff --git a/src/shared/plugins/plugin-manifest.ts b/src/shared/plugins/plugin-manifest.ts
+index aa7bae64..0cdb6dd7 100644
+--- a/src/shared/plugins/plugin-manifest.ts
++++ b/src/shared/plugins/plugin-manifest.ts
+@@ -1,3 +1,4 @@
++import { pluginPanelCommandSchema, pluginReviewProviderSchema } from './plugin-panel-contributions'
+ import { z } from 'zod'
+ import { pluginCapabilitySchema } from './plugin-capabilities'
+ import {
+@@ -55,7 +56,8 @@ const commandContributionSchema = z.object({
+   title: z.string().min(1).max(256),
+   context: z.enum(['global', 'worktree']).optional(),
+   /** Built-in action aliases remain declarative and do not activate a worker. */
+-  action: pluginCommandIdSchema.optional()
++  action: pluginCommandIdSchema.optional(),
++  panel: pluginPanelCommandSchema.optional()
+ })
+ 
+ /** Domain events a plugin can subscribe to in v0. Closed set: server-side
+@@ -98,6 +100,7 @@ export const pluginManifestSchema = z
+       .object({
+         panels: z.array(panelContributionSchema).max(PLUGIN_PANEL_LIMIT).default([]),
+         commands: z.array(commandContributionSchema).max(PLUGIN_COMMAND_LIMIT).default([]),
++        reviewProviders: z.array(pluginReviewProviderSchema).max(32).optional(),
+         events: z.array(eventContributionSchema).max(PLUGIN_EVENT_SUBSCRIPTION_LIMIT).default([]),
+         languagePacks: z
+           .array(pluginLanguagePackContributionSchema)
+diff --git a/src/shared/plugins/plugin-panel-contribution-validation.ts b/src/shared/plugins/plugin-panel-contribution-validation.ts
+new file mode 100644
+index 00000000..78b5d2fc
+--- /dev/null
++++ b/src/shared/plugins/plugin-panel-contribution-validation.ts
+@@ -0,0 +1,41 @@
++import type { RefinementCtx } from 'zod'
++import type { PluginReviewProvider } from './plugin-panel-contributions'
++
++type Manifest = {
++  contributes: {
++    commands: { id: string; action?: string; panel?: unknown }[]
++    reviewProviders?: PluginReviewProvider[]
++  }
++  capabilities: { kind: string }[]
++}
++export function validatePluginPanelContributions(manifest: Manifest, ctx: RefinementCtx): void {
++  const commands = new Map(manifest.contributes.commands.map((entry) => [entry.id, entry]))
++  const fail = (message: string) => ctx.addIssue({ code: 'custom', path: ['contributes'], message })
++  if (manifest.contributes.commands.some((command) => command.panel !== undefined)) {
++    if (!manifest.capabilities.some((c) => c.kind === 'commands:invoke-own')) {
++      fail('panel commands require commands:invoke-own')
++    }
++    if (
++      manifest.contributes.commands.some((c) => c.panel !== undefined && c.action !== undefined)
++    ) {
++      fail('aliases cannot be panel commands')
++    }
++  }
++  const providers = manifest.contributes.reviewProviders ?? []
++  if (providers.length && !manifest.capabilities.some((c) => c.kind === 'diffs:open')) {
++    fail('review providers require diffs:open')
++  }
++  const ids = new Set<string>()
++  for (const provider of providers) {
++    if (ids.has(provider.id)) {
++      fail('duplicate review provider')
++    }
++    ids.add(provider.id)
++    for (const id of [provider.snapshotCommand, provider.contentCommand]) {
++      const command = commands.get(id)
++      if (!command || command.action !== undefined || command.panel !== undefined) {
++        fail('review loaders must be declared worker commands without panel exposure')
++      }
++    }
++  }
++}
+diff --git a/src/shared/plugins/plugin-panel-contributions.ts b/src/shared/plugins/plugin-panel-contributions.ts
+new file mode 100644
+index 00000000..c6cb8385
+--- /dev/null
++++ b/src/shared/plugins/plugin-panel-contributions.ts
+@@ -0,0 +1,23 @@
++import { z } from 'zod'
++import { pluginCommandIdSchema } from './plugin-manifest-fields'
++import { pluginDataSchema } from './plugin-data-schema'
++
++export const pluginPanelCommandSchema = z
++  .object({
++    input: pluginDataSchema,
++    output: pluginDataSchema,
++    effect: z.enum(['read', 'write'])
++  })
++  .strict()
++
++export const pluginReviewProviderSchema = z
++  .object({
++    id: pluginCommandIdSchema,
++    title: z.string().min(1).max(256),
++    snapshotCommand: pluginCommandIdSchema,
++    contentCommand: pluginCommandIdSchema,
++    input: pluginDataSchema
++  })
++  .strict()
++
++export type PluginReviewProvider = z.infer<typeof pluginReviewProviderSchema>
+diff --git a/src/shared/plugins/plugin-review-contract.ts b/src/shared/plugins/plugin-review-contract.ts
+new file mode 100644
+index 00000000..bac9a198
+--- /dev/null
++++ b/src/shared/plugins/plugin-review-contract.ts
+@@ -0,0 +1,74 @@
++import { z } from 'zod'
++
++const boundedJson = (bytes: number) =>
++  z
++    .json()
++    .refine(
++      (value) => new TextEncoder().encode(JSON.stringify(value)).length <= bytes,
++      'payload too large'
++    )
++export const pluginOwnCommandSchema = z
++  .object({ commandId: z.string().min(1).max(256), args: boundedJson(48 * 1024).optional() })
++  .strict()
++export const pluginOpenReviewSchema = z
++  .object({ providerId: z.string().min(1).max(256), args: boundedJson(48 * 1024) })
++  .strict()
++export const pluginCommandResultSchema = boundedJson(48 * 1024)
++export const pluginReviewFileSchema = z
++  .object({
++    path: z.string().min(1).max(4096),
++    oldPath: z.string().min(1).max(4096).optional(),
++    status: z.enum(['added', 'deleted', 'modified', 'renamed', 'copied']),
++    additions: z.number().int().nonnegative(),
++    deletions: z.number().int().nonnegative(),
++    binary: z.boolean().optional()
++  })
++  .strict()
++export const pluginReviewSchema = z
++  .object({
++    title: z.string().min(1).max(512),
++    revision: z.string().min(1).max(512),
++    context: boundedJson(16 * 1024),
++    files: z.array(pluginReviewFileSchema).max(2000)
++  })
++  .strict()
++  .refine(
++    (value) => new TextEncoder().encode(JSON.stringify(value)).length <= 1024 * 1024,
++    'review metadata too large'
++  )
++const sideSchema = z.discriminatedUnion('kind', [
++  z
++    .object({
++      kind: z.literal('text'),
++      content: z
++        .string()
++        .max(2 * 1024 * 1024)
++        .refine(
++          (value) => new TextEncoder().encode(value).length <= 2 * 1024 * 1024,
++          'file too large'
++        )
++    })
++    .strict(),
++  z.object({ kind: z.literal('absent') }).strict(),
++  z.object({ kind: z.literal('binary'), size: z.number().nonnegative().optional() }).strict(),
++  z
++    .object({
++      kind: z.literal('limited'),
++      reason: z.string().max(512),
++      size: z.number().nonnegative().optional()
++    })
++    .strict(),
++  z
++    .object({ kind: z.literal('error'), code: z.string().max(128), message: z.string().max(512) })
++    .strict()
++])
++export const pluginReviewContentsSchema = z
++  .object({ original: sideSchema, modified: sideSchema })
++  .strict()
++export const pluginOpenedReviewSchema = z
++  .object({ reviewId: z.string().uuid(), review: pluginReviewSchema })
++  .strict()
++export type PluginReview = z.infer<typeof pluginReviewSchema>
++export type PluginReviewContents = z.infer<typeof pluginReviewContentsSchema>
++export type PluginOpenedReview = z.infer<typeof pluginOpenedReviewSchema>
++export type PluginOpenReviewInput = z.infer<typeof pluginOpenReviewSchema>
+diff --git a/tests/e2e/cv-hub-plugin.spec.ts b/tests/e2e/cv-hub-plugin.spec.ts
+new file mode 100644
+index 00000000..77fd63c0
+--- /dev/null
++++ b/tests/e2e/cv-hub-plugin.spec.ts
+@@ -0,0 +1,146 @@
++/** Runs the bundled CV Hub plugin against a local API fixture in an isolated, hidden app. */
++import { createServer } from 'node:http'
++import { once } from 'node:events'
++import { expect, test } from './helpers/orca-app'
++
++const pluginPath = process.env.CV_HUB_PLUGIN_PATH
++
++test('opens immutable CV Hub contents in the native diff viewer', async ({
++  orcaPage
++}, testInfo) => {
++  test.skip(!pluginPath, 'Set CV_HUB_PLUGIN_PATH to the built CV Hub plugin directory')
++  const pageErrors: string[] = []
++  orcaPage.on('pageerror', (error) => pageErrors.push(error.message))
++  orcaPage.on('console', (message) => {
++    if (message.type() === 'error') {
++      console.error('[cv-console]', message.text())
++    }
++  })
++  const head = 'a'.repeat(40)
++  const base = 'b'.repeat(40)
++  const requests: string[] = []
++  let origin = ''
++  const server = createServer((req, res) => {
++    const url = new URL(req.url ?? '/', origin)
++    requests.push(url.pathname + url.search)
++    res.setHeader('Content-Type', 'application/json')
++    if (req.headers.authorization !== 'Bearer cv_pat_fixture') {
++      res.writeHead(401).end('{}')
++      return
++    }
++    let body: unknown
++    if (url.pathname === '/api/auth/me') {
++      body = { user: { id: 'u', username: 'alice' } }
++    } else if (url.pathname === '/api/mcp/connection-info') {
++      body = { transport: 'streamable-http', mcpUrl: `${origin}/mcp` }
++    } else if (url.pathname === '/api/v1/repos') {
++      body = {
++        repositories: [{ id: 'r', slug: 'demo', owner: { slug: 'acme' } }],
++        pagination: { total: 1 }
++      }
++    } else if (url.pathname.endsWith('/review-snapshot')) {
++      body = {
++        snapshot: {
++          owner: 'acme',
++          repo: 'demo',
++          repositoryId: 'r',
++          number: 7,
++          title: 'Change greeting',
++          baseSha: base,
++          mergeBaseSha: base,
++          headSha: head,
++          files: [{ path: 'hello.ts', status: 'modified', additions: 1, deletions: 1 }]
++        }
++      }
++    } else if (url.pathname.endsWith('/review-file')) {
++      body = {
++        kind: 'text',
++        content:
++          url.searchParams.get('sha') === base
++            ? 'export const greeting = "before"\n'
++            : 'export const greeting = "after"\n'
++      }
++    } else {
++      const pull = {
++        number: 7,
++        title: 'Change greeting',
++        state: 'open',
++        body: 'Review the greeting',
++        sourceBranch: 'feature',
++        targetBranch: 'main',
++        author: { username: 'alice' }
++      }
++      if (url.pathname.endsWith('/pulls')) {
++        body = { pullRequests: [pull], total: 1 }
++      } else if (url.pathname.endsWith('/pulls/7')) {
++        body = { pullRequest: pull }
++      } else {
++        res.writeHead(404).end('{}')
++        return
++      }
++    }
++    res.end(JSON.stringify(body))
++  })
++  server.listen(0, '127.0.0.1')
++  await once(server, 'listening')
++  const address = server.address()
++  if (!address || typeof address === 'string') {
++    throw new Error('No fixture port')
++  }
++  origin = `http://127.0.0.1:${address.port}`
++  try {
++    const installed = await orcaPage.evaluate(async (sourcePath) => {
++      const settings = await window.api.settings.set({ pluginSystemEnabled: true })
++      window.__store?.setState({ settings })
++      const result = await window.api.plugins.install({ kind: 'local-path', path: sourcePath })
++      if (!result.ok) {
++        throw new Error(result.error)
++      }
++      await window.api.plugins.refresh()
++      const state = window.__store?.getState()
++      state?.openSettingsTarget({ pane: 'plugins', repoId: null })
++      state?.openSettingsPage()
++      return result
++    }, pluginPath!)
++    await orcaPage.getByRole('tab', { name: /^Installed/ }).click()
++    const row = orcaPage.locator(`[data-plugin-key="${installed.pluginKey}"]`)
++    await row.getByRole('button', { name: 'Review & enable' }).click()
++    await orcaPage
++      .getByRole('dialog', { name: 'Review permissions' })
++      .getByRole('button', { name: 'Enable plugin' })
++      .click()
++    await expect(row).toContainText('Enabled')
++    await orcaPage.evaluate(() => {
++      const state = window.__store?.getState()
++      state?.closeSettingsPage()
++      if (state && !state.rightSidebarOpen) {
++        state.toggleRightSidebar()
++      }
++    })
++    await orcaPage.getByRole('button', { name: 'CV Hub', exact: true }).click()
++    const panel = orcaPage.frameLocator('iframe[title="CV Hub"]')
++    await panel.locator('#origin').fill(origin)
++    await panel.locator('#token').fill('cv_pat_fixture')
++    await panel.locator('#connect-button').click()
++    await panel.getByRole('button', { name: /#7 Change greeting/ }).click()
++    await panel.getByRole('button', { name: 'Open changes in Orca' }).click()
++    const review = orcaPage.getByRole('dialog', { name: /acme\/demo #7/ })
++    await expect(review).toBeVisible()
++    await expect(review.locator('.monaco-diff-editor')).toBeVisible()
++    await expect(review.locator('.view-lines')).toContainText(['before', 'after'])
++    expect(requests).toContain(
++      `/api/v1/repos/acme/demo/pulls/7/review-file?sha=${base}&path=hello.ts`
++    )
++    expect(requests).toContain(
++      `/api/v1/repos/acme/demo/pulls/7/review-file?sha=${head}&path=hello.ts`
++    )
++    await review.screenshot({ path: testInfo.outputPath('native-review.png') })
++    await review.getByRole('button', { name: 'Unified view' }).click()
++    await review.getByRole('button', { name: 'Close', exact: true }).click()
++    await expect(panel.getByRole('button', { name: 'Submit review', exact: true })).toBeEnabled()
++    expect(pageErrors).toEqual([])
++  } finally {
++    server.closeAllConnections()
++    await new Promise<void>((resolve) => server.close(() => resolve()))
++  }
++})
+diff --git a/tests/e2e/plugin-review-boundary.spec.ts b/tests/e2e/plugin-review-boundary.spec.ts
+new file mode 100644
+index 00000000..8ca2d03b
+--- /dev/null
++++ b/tests/e2e/plugin-review-boundary.spec.ts
+@@ -0,0 +1,161 @@
++/** Exercises the real iframe → worker → native viewer path without a service account. */
++import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
++import { tmpdir } from 'node:os'
++import { join } from 'node:path'
++import { expect, test } from './helpers/orca-app'
++
++function createReviewPlugin(): string {
++  const root = mkdtempSync(join(tmpdir(), 'orca-review-boundary-'))
++  const empty = { type: 'object', properties: {}, additionalProperties: false }
++  const manifest = {
++    manifestVersion: 1,
++    id: 'review-boundary',
++    publisher: 'orca-tests',
++    name: 'Review Boundary',
++    version: '1.0.0',
++    engines: { orca: '>=1.4.0' },
++    pluginApi: 1,
++    main: 'main.mjs',
++    capabilities: [{ kind: 'commands:invoke-own' }, { kind: 'diffs:open' }],
++    contributes: {
++      panels: [{ id: 'review', title: 'Review Boundary', entry: 'panel.html' }],
++      commands: [
++        { id: 'snapshot', title: 'Snapshot loader' },
++        { id: 'contents', title: 'Content loader' },
++        { id: 'write', title: 'Internal write' },
++        {
++          id: 'status',
++          title: 'Status',
++          panel: {
++            effect: 'read',
++            input: empty,
++            output: { type: 'integer', minimum: 0 }
++          }
++        }
++      ],
++      reviewProviders: [
++        {
++          id: 'pull-request',
++          title: 'Pull request',
++          snapshotCommand: 'snapshot',
++          contentCommand: 'contents',
++          input: empty
++        }
++      ]
++    }
++  }
++  writeFileSync(join(root, 'orca-plugin.json'), JSON.stringify(manifest))
++  writeFileSync(
++    join(root, 'main.mjs'),
++    `
++    export default function activate(orca) {
++      let writes = 0;
++      orca.commands.register('write', () => ++writes);
++      orca.commands.register('status', () => writes);
++      orca.commands.register('snapshot', () => ({
++        title: 'Boundary review', revision: 'immutable-head', context: { secret: 'host-context' },
++        files: [{ path: 'hello.ts', status: 'modified', additions: 1, deletions: 1 }]
++      }));
++      orca.commands.register('contents', () => ({
++        original: { kind: 'text', content: 'export const greeting = "before"\\n' },
++        modified: { kind: 'text', content: 'export const greeting = "after"\\n' }
++      }));
++    }
++  `
++  )
++  writeFileSync(
++    join(root, 'panel.html'),
++    `<!doctype html><html><body>
++    <button id="probe">Probe denied paths</button><output id="probes"></output>
++    <button id="open">Open review</button><output id="result"></output>
++    <script>
++      let sequence = 0;
++      const pending = new Map();
++      function call(action, params) {
++        return new Promise(resolve => {
++          const requestId = 'request-' + ++sequence;
++          pending.set(requestId, resolve);
++          parent.postMessage({ type: 'orca-panel-action', requestId, action, params }, '*');
++        });
++      }
++      addEventListener('message', event => {
++        const data = event.data;
++        if (event.source !== parent || data?.type !== 'orca-panel-action-result') return;
++        const resolve = pending.get(data.requestId);
++        pending.delete(data.requestId);
++        resolve?.(data);
++      });
++      document.getElementById('probe').onclick = async () => {
++        const loader = await call('commands.invokeOwn', { commandId: 'contents', args: {} });
++        const writer = await call('commands.invokeOwn', { commandId: 'write', args: {} });
++        const injection = await call('diffs.openReview', {
++          commandId: 'write', contentCommandId: 'contents', args: {}
++        });
++        const status = await call('commands.invokeOwn', { commandId: 'status', args: {} });
++        document.getElementById('probes').textContent =
++          !loader.ok && !writer.ok && !injection.ok && status.ok && status.value === 0
++            ? 'Denied; writes: 0' : 'Boundary failed';
++      };
++      document.getElementById('open').onclick = async () => {
++        const result = await call('diffs.openReview', { providerId: 'pull-request', args: {} });
++        const keys = Object.keys(result.value || {}).sort().join(',');
++        document.getElementById('result').textContent = result.ok && keys === 'reviewId,revision'
++          ? 'Opened: ' + result.value.revision : 'Unexpected response: ' + JSON.stringify(result);
++      };
++    </script></body></html>`
++  )
++  return root
++}
++
++test('panel authority is bounded while native reviews remain usable', async ({
++  orcaPage,
++  registerPostElectronShutdownCleanup
++}, testInfo) => {
++  const pluginPath = createReviewPlugin()
++  registerPostElectronShutdownCleanup(async () =>
++    rmSync(pluginPath, { recursive: true, force: true })
++  )
++  const pageErrors: string[] = []
++  orcaPage.on('pageerror', (error) => pageErrors.push(error.message))
++  const installed = await orcaPage.evaluate(async (sourcePath) => {
++    const settings = await window.api.settings.set({ pluginSystemEnabled: true })
++    window.__store?.setState({ settings })
++    const result = await window.api.plugins.install({ kind: 'local-path', path: sourcePath })
++    if (!result.ok) {
++      throw new Error(result.error)
++    }
++    await window.api.plugins.refresh()
++    window.__store?.getState().openSettingsTarget({ pane: 'plugins', repoId: null })
++    window.__store?.getState().openSettingsPage()
++    return result
++  }, pluginPath)
++  await orcaPage.getByRole('tab', { name: /^Installed/ }).click()
++  const row = orcaPage.locator(`[data-plugin-key="${installed.pluginKey}"]`)
++  await row.getByRole('button', { name: 'Review & enable' }).click()
++  await orcaPage
++    .getByRole('dialog', { name: 'Review permissions' })
++    .getByRole('button', { name: 'Enable plugin' })
++    .click()
++  await expect(row).toContainText('Enabled')
++  await orcaPage.evaluate(() => {
++    const state = window.__store?.getState()
++    state?.closeSettingsPage()
++    if (state && !state.rightSidebarOpen) {
++      state.toggleRightSidebar()
++    }
++  })
++  await orcaPage.getByRole('button', { name: 'Review Boundary', exact: true }).click()
++  const panel = orcaPage.frameLocator('iframe[title="Review Boundary"]')
++  await panel.getByRole('button', { name: 'Probe denied paths' }).click()
++  await expect(panel.locator('#probes')).toHaveText('Denied; writes: 0')
++  await panel.getByRole('button', { name: 'Open review' }).click()
++  const review = orcaPage.getByRole('dialog', { name: 'Boundary review' })
++  await expect(review).toBeVisible()
++  await expect(review.locator('.monaco-diff-editor')).toBeVisible()
++  await expect(review.locator('.view-lines')).toContainText(['before', 'after'])
++  await review.screenshot({ path: testInfo.outputPath('native-review-boundary.png') })
++  await review.getByRole('button', { name: 'Unified view' }).click()
++  await review.getByRole('button', { name: 'Close', exact: true }).click()
++  await expect(panel.locator('#result')).toHaveText('Opened: immutable-head')
++  expect(pageErrors).toEqual([])
++})

@@ -1,0 +1,19 @@
+{
+  "name": "CV Hub",
+  "owner": "controlvector",
+  "plugins": [
+    {
+      "id": "controlvector.cv-hub",
+      "source": {
+        "kind": "git",
+        "url": "https://github.com/lamtuanvu/cv-hub-orca-plugin.git",
+        "ref": "plugin-v0.4.0"
+      },
+      "description": "Review CV Hub pull requests in Orca's native diff viewer, check CI and reviews, and search code through MCP. Signs in with CV Hub OAuth in your browser. Requires the lamtuanvu/orca build of Orca (native plugin review host).",
+      "categories": [
+        "source-control",
+        "code-review"
+      ]
+    }
+  ]
+}
