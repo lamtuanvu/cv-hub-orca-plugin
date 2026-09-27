@@ -1,0 +1,1434 @@
+{
+  "manifestVersion": 1,
+  "id": "cv-hub",
+  "publisher": "controlvector",
+  "name": "CV Hub",
+  "version": "0.4.0",
+  "description": "Review CV Hub pull requests in Orca's native diff viewer, check CI and reviews, and search code through MCP. Signs in with CV Hub OAuth in your browser. Requires the lamtuanvu/orca build of Orca (native plugin review host).",
+  "engines": {
+    "orca": ">=1.4.197"
+  },
+  "pluginApi": 1,
+  "main": "main.mjs",
+  "contributes": {
+    "panels": [
+      {
+        "id": "cv-hub",
+        "title": "CV Hub",
+        "icon": "git-pull-request",
+        "entry": "panel.html"
+      }
+    ],
+    "commands": [
+      {
+        "id": "cvhub.authStatus",
+        "title": "CV Hub: Sign-in status",
+        "panel": {
+          "effect": "read",
+          "input": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "output": {
+            "type": "object",
+            "properties": {
+              "connection": {
+                "type": "object",
+                "properties": {
+                  "origin": {
+                    "type": "string",
+                    "maxLength": 2048
+                  },
+                  "mcpUrl": {
+                    "type": "string",
+                    "maxLength": 2048
+                  },
+                  "username": {
+                    "type": "string",
+                    "maxLength": 256
+                  },
+                  "userId": {
+                    "type": "string",
+                    "maxLength": 256
+                  },
+                  "displayName": {
+                    "type": "string",
+                    "maxLength": 256,
+                    "nullable": true
+                  },
+                  "canWrite": {
+                    "type": "boolean"
+                  },
+                  "expired": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "origin",
+                  "mcpUrl",
+                  "username",
+                  "userId",
+                  "displayName",
+                  "canWrite",
+                  "expired"
+                ],
+                "additionalProperties": false,
+                "nullable": true
+              },
+              "legacy": {
+                "type": "object",
+                "properties": {
+                  "origin": {
+                    "type": "string",
+                    "maxLength": 2048
+                  },
+                  "username": {
+                    "type": "string",
+                    "maxLength": 256
+                  }
+                },
+                "required": [
+                  "origin",
+                  "username"
+                ],
+                "additionalProperties": false,
+                "nullable": true
+              },
+              "attempt": {
+                "type": "object",
+                "properties": {
+                  "attemptId": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "origin": {
+                    "type": "string",
+                    "maxLength": 2048
+                  },
+                  "phase": {
+                    "type": "string",
+                    "maxLength": 32,
+                    "enum": [
+                      "pending",
+                      "denied",
+                      "expired",
+                      "offline",
+                      "invalid_client",
+                      "error",
+                      "connected"
+                    ]
+                  },
+                  "userCode": {
+                    "type": "string",
+                    "maxLength": 32
+                  },
+                  "verificationUri": {
+                    "type": "string",
+                    "maxLength": 2048
+                  },
+                  "expiresAt": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "message": {
+                    "type": "string",
+                    "maxLength": 512,
+                    "nullable": true
+                  },
+                  "browser": {
+                    "type": "string",
+                    "maxLength": 32,
+                    "enum": [
+                      "idle",
+                      "confirming",
+                      "opened",
+                      "declined",
+                      "unavailable",
+                      "unverified",
+                      "rate_limited",
+                      "invalidated"
+                    ]
+                  },
+                  "browserMessage": {
+                    "type": "string",
+                    "maxLength": 512,
+                    "nullable": true
+                  }
+                },
+                "required": [
+                  "attemptId",
+                  "origin",
+                  "phase",
+                  "userCode",
+                  "verificationUri",
+                  "expiresAt",
+                  "message",
+                  "browser",
+                  "browserMessage"
+                ],
+                "additionalProperties": false,
+                "nullable": true
+              }
+            },
+            "required": [
+              "connection",
+              "legacy",
+              "attempt"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "id": "cvhub.authStart",
+        "title": "CV Hub: Sign in",
+        "panel": {
+          "effect": "write",
+          "input": {
+            "type": "object",
+            "properties": {
+              "origin": {
+                "type": "string",
+                "maxLength": 2048,
+                "minLength": 1
+              }
+            },
+            "required": [
+              "origin"
+            ],
+            "additionalProperties": false
+          },
+          "output": {
+            "type": "object",
+            "properties": {
+              "attemptId": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "origin": {
+                "type": "string",
+                "maxLength": 2048
+              },
+              "phase": {
+                "type": "string",
+                "maxLength": 32,
+                "enum": [
+                  "pending",
+                  "denied",
+                  "expired",
+                  "offline",
+                  "invalid_client",
+                  "error",
+                  "connected"
+                ]
+              },
+              "userCode": {
+                "type": "string",
+                "maxLength": 32
+              },
+              "verificationUri": {
+                "type": "string",
+                "maxLength": 2048
+              },
+              "expiresAt": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "message": {
+                "type": "string",
+                "maxLength": 512,
+                "nullable": true
+              },
+              "browser": {
+                "type": "string",
+                "maxLength": 32,
+                "enum": [
+                  "idle",
+                  "confirming",
+                  "opened",
+                  "declined",
+                  "unavailable",
+                  "unverified",
+                  "rate_limited",
+                  "invalidated"
+                ]
+              },
+              "browserMessage": {
+                "type": "string",
+                "maxLength": 512,
+                "nullable": true
+              }
+            },
+            "required": [
+              "attemptId",
+              "origin",
+              "phase",
+              "userCode",
+              "verificationUri",
+              "expiresAt",
+              "message",
+              "browser",
+              "browserMessage"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "id": "cvhub.authCancel",
+        "title": "CV Hub: Cancel sign-in",
+        "panel": {
+          "effect": "write",
+          "input": {
+            "type": "object",
+            "properties": {
+              "attemptId": {
+                "type": "string",
+                "maxLength": 64,
+                "nullable": true
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          },
+          "output": {
+            "type": "object",
+            "properties": {
+              "connection": {
+                "type": "object",
+                "properties": {
+                  "origin": {
+                    "type": "string",
+                    "maxLength": 2048
+                  },
+                  "mcpUrl": {
+                    "type": "string",
+                    "maxLength": 2048
+                  },
+                  "username": {
+                    "type": "string",
+                    "maxLength": 256
+                  },
+                  "userId": {
+                    "type": "string",
+                    "maxLength": 256
+                  },
+                  "displayName": {
+                    "type": "string",
+                    "maxLength": 256,
+                    "nullable": true
+                  },
+                  "canWrite": {
+                    "type": "boolean"
+                  },
+                  "expired": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "origin",
+                  "mcpUrl",
+                  "username",
+                  "userId",
+                  "displayName",
+                  "canWrite",
+                  "expired"
+                ],
+                "additionalProperties": false,
+                "nullable": true
+              },
+              "legacy": {
+                "type": "object",
+                "properties": {
+                  "origin": {
+                    "type": "string",
+                    "maxLength": 2048
+                  },
+                  "username": {
+                    "type": "string",
+                    "maxLength": 256
+                  }
+                },
+                "required": [
+                  "origin",
+                  "username"
+                ],
+                "additionalProperties": false,
+                "nullable": true
+              },
+              "attempt": {
+                "type": "object",
+                "properties": {
+                  "attemptId": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "origin": {
+                    "type": "string",
+                    "maxLength": 2048
+                  },
+                  "phase": {
+                    "type": "string",
+                    "maxLength": 32,
+                    "enum": [
+                      "pending",
+                      "denied",
+                      "expired",
+                      "offline",
+                      "invalid_client",
+                      "error",
+                      "connected"
+                    ]
+                  },
+                  "userCode": {
+                    "type": "string",
+                    "maxLength": 32
+                  },
+                  "verificationUri": {
+                    "type": "string",
+                    "maxLength": 2048
+                  },
+                  "expiresAt": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "message": {
+                    "type": "string",
+                    "maxLength": 512,
+                    "nullable": true
+                  },
+                  "browser": {
+                    "type": "string",
+                    "maxLength": 32,
+                    "enum": [
+                      "idle",
+                      "confirming",
+                      "opened",
+                      "declined",
+                      "unavailable",
+                      "unverified",
+                      "rate_limited",
+                      "invalidated"
+                    ]
+                  },
+                  "browserMessage": {
+                    "type": "string",
+                    "maxLength": 512,
+                    "nullable": true
+                  }
+                },
+                "required": [
+                  "attemptId",
+                  "origin",
+                  "phase",
+                  "userCode",
+                  "verificationUri",
+                  "expiresAt",
+                  "message",
+                  "browser",
+                  "browserMessage"
+                ],
+                "additionalProperties": false,
+                "nullable": true
+              }
+            },
+            "required": [
+              "connection",
+              "legacy",
+              "attempt"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "id": "cvhub.authOpenVerification",
+        "title": "CV Hub: Continue sign-in in browser",
+        "panel": {
+          "effect": "write",
+          "input": {
+            "type": "object",
+            "properties": {
+              "attemptId": {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 1
+              }
+            },
+            "required": [
+              "attemptId"
+            ],
+            "additionalProperties": false
+          },
+          "output": {
+            "type": "object",
+            "properties": {
+              "requested": {
+                "type": "boolean"
+              },
+              "browser": {
+                "type": "string",
+                "maxLength": 32,
+                "enum": [
+                  "idle",
+                  "confirming",
+                  "opened",
+                  "declined",
+                  "unavailable",
+                  "unverified",
+                  "rate_limited",
+                  "invalidated"
+                ]
+              },
+              "browserMessage": {
+                "type": "string",
+                "maxLength": 512,
+                "nullable": true
+              }
+            },
+            "required": [
+              "requested",
+              "browser",
+              "browserMessage"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "id": "cvhub.disconnect",
+        "title": "CV Hub: Sign out",
+        "panel": {
+          "effect": "write",
+          "input": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "output": {
+            "type": "object",
+            "properties": {
+              "signedOut": {
+                "type": "boolean"
+              },
+              "revoked": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "signedOut",
+              "revoked"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "id": "cvhub.listRepositories",
+        "title": "CV Hub: List repositories",
+        "panel": {
+          "effect": "read",
+          "input": {
+            "type": "object",
+            "properties": {
+              "offset": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000
+              },
+              "search": {
+                "type": "string",
+                "maxLength": 100
+              }
+            },
+            "required": [
+              "offset",
+              "search"
+            ],
+            "additionalProperties": false
+          },
+          "output": {
+            "type": "object",
+            "properties": {
+              "repositories": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "owner": {
+                      "type": "string",
+                      "maxLength": 256
+                    },
+                    "repo": {
+                      "type": "string",
+                      "maxLength": 256
+                    }
+                  },
+                  "required": [
+                    "owner",
+                    "repo"
+                  ],
+                  "additionalProperties": false
+                },
+                "maxItems": 20
+              },
+              "total": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "repositories",
+              "total"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "id": "cvhub.activeRepository",
+        "title": "CV Hub: Repository of the focused worktree",
+        "panel": {
+          "effect": "read",
+          "input": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+          },
+          "output": {
+            "type": "object",
+            "properties": {
+              "repository": {
+                "type": "object",
+                "properties": {
+                  "owner": {
+                    "type": "string",
+                    "maxLength": 256
+                  },
+                  "repo": {
+                    "type": "string",
+                    "maxLength": 256
+                  }
+                },
+                "required": [
+                  "owner",
+                  "repo"
+                ],
+                "additionalProperties": false,
+                "nullable": true
+              },
+              "source": {
+                "type": "string",
+                "maxLength": 16,
+                "enum": [
+                  "workspace",
+                  "remembered",
+                  "none"
+                ]
+              },
+              "workspace": {
+                "type": "string",
+                "maxLength": 32,
+                "enum": [
+                  "matched",
+                  "no_worktree",
+                  "no_remote",
+                  "other_server",
+                  "not_found",
+                  "unsupported"
+                ]
+              }
+            },
+            "required": [
+              "repository",
+              "source",
+              "workspace"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "id": "cvhub.rememberRepository",
+        "title": "CV Hub: Remember the selected repository",
+        "panel": {
+          "effect": "write",
+          "input": {
+            "type": "object",
+            "properties": {
+              "owner": {
+                "type": "string",
+                "maxLength": 256,
+                "minLength": 1
+              },
+              "repo": {
+                "type": "string",
+                "maxLength": 256,
+                "minLength": 1
+              }
+            },
+            "required": [
+              "owner",
+              "repo"
+            ],
+            "additionalProperties": false
+          },
+          "output": {
+            "type": "object",
+            "properties": {
+              "ok": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "ok"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "id": "cvhub.listPulls",
+        "title": "CV Hub: List pull requests",
+        "panel": {
+          "effect": "read",
+          "input": {
+            "type": "object",
+            "properties": {
+              "owner": {
+                "type": "string",
+                "maxLength": 256,
+                "minLength": 1
+              },
+              "repo": {
+                "type": "string",
+                "maxLength": 256,
+                "minLength": 1
+              },
+              "offset": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000
+              },
+              "state": {
+                "type": "string",
+                "maxLength": 16,
+                "enum": [
+                  "open",
+                  "closed",
+                  "merged",
+                  "all"
+                ]
+              },
+              "mine": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "owner",
+              "repo",
+              "offset",
+              "state",
+              "mine"
+            ],
+            "additionalProperties": false
+          },
+          "output": {
+            "type": "object",
+            "properties": {
+              "pulls": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "number": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "title": {
+                      "type": "string",
+                      "maxLength": 512
+                    },
+                    "state": {
+                      "type": "string",
+                      "maxLength": 32
+                    },
+                    "isDraft": {
+                      "type": "boolean"
+                    },
+                    "author": {
+                      "type": "string",
+                      "maxLength": 256
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "maxLength": 64,
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "number",
+                    "title",
+                    "state",
+                    "isDraft",
+                    "author",
+                    "updatedAt"
+                  ],
+                  "additionalProperties": false
+                },
+                "maxItems": 20
+              },
+              "total": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "pulls",
+              "total"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "id": "cvhub.getPull",
+        "title": "CV Hub: Pull request details",
+        "panel": {
+          "effect": "read",
+          "input": {
+            "type": "object",
+            "properties": {
+              "owner": {
+                "type": "string",
+                "maxLength": 256,
+                "minLength": 1
+              },
+              "repo": {
+                "type": "string",
+                "maxLength": 256,
+                "minLength": 1
+              },
+              "number": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "owner",
+              "repo",
+              "number"
+            ],
+            "additionalProperties": false
+          },
+          "output": {
+            "type": "object",
+            "properties": {
+              "number": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "title": {
+                "type": "string",
+                "maxLength": 512
+              },
+              "state": {
+                "type": "string",
+                "maxLength": 32
+              },
+              "isDraft": {
+                "type": "boolean"
+              },
+              "author": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "body": {
+                "type": "string",
+                "maxLength": 12000
+              },
+              "sourceBranch": {
+                "type": "string",
+                "maxLength": 1024
+              },
+              "targetBranch": {
+                "type": "string",
+                "maxLength": 1024
+              },
+              "sourceSha": {
+                "type": "string",
+                "maxLength": 40,
+                "nullable": true
+              },
+              "createdAt": {
+                "type": "string",
+                "maxLength": 64,
+                "nullable": true
+              },
+              "updatedAt": {
+                "type": "string",
+                "maxLength": 64,
+                "nullable": true
+              },
+              "canWrite": {
+                "type": "boolean"
+              },
+              "gate": {
+                "type": "object",
+                "properties": {
+                  "approvals": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "required": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "blockedBy": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 256
+                    },
+                    "maxItems": 20
+                  },
+                  "nonCountingApprovals": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "approvals",
+                  "required",
+                  "blockedBy",
+                  "nonCountingApprovals"
+                ],
+                "additionalProperties": false,
+                "nullable": true
+              }
+            },
+            "required": [
+              "number",
+              "title",
+              "state",
+              "isDraft",
+              "author",
+              "body",
+              "sourceBranch",
+              "targetBranch",
+              "sourceSha",
+              "createdAt",
+              "updatedAt",
+              "canWrite",
+              "gate"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "id": "cvhub.mergePull",
+        "title": "CV Hub: Merge pull request",
+        "panel": {
+          "effect": "write",
+          "input": {
+            "type": "object",
+            "properties": {
+              "owner": {
+                "type": "string",
+                "maxLength": 256,
+                "minLength": 1
+              },
+              "repo": {
+                "type": "string",
+                "maxLength": 256,
+                "minLength": 1
+              },
+              "number": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "expectedHeadSha": {
+                "type": "string",
+                "maxLength": 40,
+                "minLength": 40
+              },
+              "method": {
+                "type": "string",
+                "maxLength": 16,
+                "enum": [
+                  "merge",
+                  "squash",
+                  "rebase"
+                ]
+              }
+            },
+            "required": [
+              "owner",
+              "repo",
+              "number",
+              "expectedHeadSha",
+              "method"
+            ],
+            "additionalProperties": false
+          },
+          "output": {
+            "type": "object",
+            "properties": {
+              "state": {
+                "type": "string",
+                "maxLength": 32
+              }
+            },
+            "required": [
+              "state"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "id": "cvhub.updatePullState",
+        "title": "CV Hub: Close, reopen or change draft state",
+        "panel": {
+          "effect": "write",
+          "input": {
+            "type": "object",
+            "properties": {
+              "owner": {
+                "type": "string",
+                "maxLength": 256,
+                "minLength": 1
+              },
+              "repo": {
+                "type": "string",
+                "maxLength": 256,
+                "minLength": 1
+              },
+              "number": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "action": {
+                "type": "string",
+                "maxLength": 16,
+                "enum": [
+                  "close",
+                  "reopen",
+                  "ready",
+                  "draft"
+                ]
+              }
+            },
+            "required": [
+              "owner",
+              "repo",
+              "number",
+              "action"
+            ],
+            "additionalProperties": false
+          },
+          "output": {
+            "type": "object",
+            "properties": {
+              "state": {
+                "type": "string",
+                "maxLength": 32
+              },
+              "isDraft": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "state",
+              "isDraft"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "id": "cvhub.getPullChecks",
+        "title": "CV Hub: Pull request checks",
+        "panel": {
+          "effect": "read",
+          "input": {
+            "type": "object",
+            "properties": {
+              "owner": {
+                "type": "string",
+                "maxLength": 256,
+                "minLength": 1
+              },
+              "repo": {
+                "type": "string",
+                "maxLength": 256,
+                "minLength": 1
+              },
+              "number": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "owner",
+              "repo",
+              "number"
+            ],
+            "additionalProperties": false
+          },
+          "output": {
+            "type": "object",
+            "properties": {
+              "checks": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "maxLength": 256
+                    },
+                    "status": {
+                      "type": "string",
+                      "maxLength": 64
+                    },
+                    "conclusion": {
+                      "type": "string",
+                      "maxLength": 64,
+                      "nullable": true
+                    },
+                    "durationMs": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "status",
+                    "conclusion",
+                    "durationMs"
+                  ],
+                  "additionalProperties": false
+                },
+                "maxItems": 30
+              },
+              "total": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "checks",
+              "total"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "id": "cvhub.listReviews",
+        "title": "CV Hub: Review history",
+        "panel": {
+          "effect": "read",
+          "input": {
+            "type": "object",
+            "properties": {
+              "owner": {
+                "type": "string",
+                "maxLength": 256,
+                "minLength": 1
+              },
+              "repo": {
+                "type": "string",
+                "maxLength": 256,
+                "minLength": 1
+              },
+              "number": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "owner",
+              "repo",
+              "number"
+            ],
+            "additionalProperties": false
+          },
+          "output": {
+            "type": "object",
+            "properties": {
+              "reviews": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "maxLength": 64
+                    },
+                    "state": {
+                      "type": "string",
+                      "maxLength": 32
+                    },
+                    "body": {
+                      "type": "string",
+                      "maxLength": 1000
+                    },
+                    "commitSha": {
+                      "type": "string",
+                      "maxLength": 40,
+                      "nullable": true
+                    },
+                    "submittedAt": {
+                      "type": "string",
+                      "maxLength": 64,
+                      "nullable": true
+                    },
+                    "reviewer": {
+                      "type": "string",
+                      "maxLength": 256,
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "state",
+                    "body",
+                    "commitSha",
+                    "submittedAt",
+                    "reviewer"
+                  ],
+                  "additionalProperties": false
+                },
+                "maxItems": 20
+              },
+              "total": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "reviews",
+              "total"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "id": "cvhub.submitReview",
+        "title": "CV Hub: Submit review",
+        "panel": {
+          "effect": "write",
+          "input": {
+            "type": "object",
+            "properties": {
+              "owner": {
+                "type": "string",
+                "maxLength": 256,
+                "minLength": 1
+              },
+              "repo": {
+                "type": "string",
+                "maxLength": 256,
+                "minLength": 1
+              },
+              "number": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "expectedHeadSha": {
+                "type": "string",
+                "maxLength": 40,
+                "minLength": 40
+              },
+              "state": {
+                "type": "string",
+                "maxLength": 32,
+                "enum": [
+                  "approved",
+                  "changes_requested",
+                  "commented"
+                ]
+              },
+              "body": {
+                "type": "string",
+                "maxLength": 12000
+              }
+            },
+            "required": [
+              "owner",
+              "repo",
+              "number",
+              "expectedHeadSha",
+              "state",
+              "body"
+            ],
+            "additionalProperties": false
+          },
+          "output": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "state": {
+                "type": "string",
+                "maxLength": 32
+              }
+            },
+            "required": [
+              "id",
+              "state"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "id": "cvhub.searchCode",
+        "title": "CV Hub: Search code",
+        "panel": {
+          "effect": "read",
+          "input": {
+            "type": "object",
+            "properties": {
+              "owner": {
+                "type": "string",
+                "maxLength": 256,
+                "minLength": 1
+              },
+              "repo": {
+                "type": "string",
+                "maxLength": 256,
+                "minLength": 1
+              },
+              "query": {
+                "type": "string",
+                "maxLength": 1000,
+                "minLength": 1
+              }
+            },
+            "required": [
+              "owner",
+              "repo",
+              "query"
+            ],
+            "additionalProperties": false
+          },
+          "output": {
+            "type": "object",
+            "properties": {
+              "results": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "maxLength": 4096
+                    },
+                    "symbol": {
+                      "type": "string",
+                      "maxLength": 512
+                    },
+                    "line": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "nullable": true
+                    },
+                    "content": {
+                      "type": "string",
+                      "maxLength": 1200
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "symbol",
+                    "line",
+                    "content"
+                  ],
+                  "additionalProperties": false
+                },
+                "maxItems": 8
+              }
+            },
+            "required": [
+              "results"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "id": "cvhub.getReview",
+        "title": "CV Hub: Load review snapshot"
+      },
+      {
+        "id": "cvhub.readReviewFile",
+        "title": "CV Hub: Read review file"
+      }
+    ],
+    "reviewProviders": [
+      {
+        "id": "cvhub.pullRequest",
+        "title": "CV Hub pull request",
+        "snapshotCommand": "cvhub.getReview",
+        "contentCommand": "cvhub.readReviewFile",
+        "input": {
+          "type": "object",
+          "properties": {
+            "owner": {
+              "type": "string",
+              "maxLength": 256,
+              "minLength": 1
+            },
+            "repo": {
+              "type": "string",
+              "maxLength": 256,
+              "minLength": 1
+            },
+            "number": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "required": [
+            "owner",
+            "repo",
+            "number"
+          ],
+          "additionalProperties": false
+        }
+      }
+    ]
+  },
+  "capabilities": [
+    {
+      "kind": "storage"
+    },
+    {
+      "kind": "secrets"
+    },
+    {
+      "kind": "commands:invoke-own"
+    },
+    {
+      "kind": "diffs:open"
+    },
+    {
+      "kind": "browser:authorize"
+    },
+    {
+      "kind": "workspace:read"
+    }
+  ]
+}
