@@ -35,7 +35,8 @@ for (const provider of manifest.contributes.reviewProviders ?? []) {
     assert.equal(byId.get(id).panel, undefined, `${id} must not be panel-callable`);
   }
 }
-assert.ok(!manifest.capabilities.some((c) => c.kind === "browser:open-external"), "browser:open-external was removed from Orca");
+assert.ok(manifest.capabilities.some((c) => c.kind === "browser:open-external"), "PR links require browser:open-external");
+assert.equal(manifest.contributes.panels[0].icon, "cv-hub");
 // The committed marketplace index must list this exact build under its release tag.
 const marketplace = JSON.parse(await readFile(new URL("../orca-marketplace.json", root), "utf8"));
 assert.deepEqual(

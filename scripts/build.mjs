@@ -25,7 +25,7 @@ const panel = await build({
   outdir: "panel",
   minify: true,
   // The sandboxed panel cannot load remote or relative assets, so images are inlined.
-  loader: { ".png": "dataurl" },
+  loader: { ".png": "dataurl", ".svg": "dataurl" },
 });
 const js = panel.outputFiles
   .find((file) => file.path.endsWith(".js"))

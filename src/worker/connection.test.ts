@@ -131,7 +131,8 @@ describe("OAuth device sign-in", () => {
     await advance(5000);
     const status = await c.status();
     expect(status.attempt?.phase).toBe("connected");
-    expect(status.connection).toMatchObject({ username: "mara", canWrite: true, expired: false });
+    expect(status.connection).toMatchObject({ username: "mara", canWrite: true, expired: false, webOrigin: "http://localhost:5174" });
+    expect(await new Connection(host, s.fetcher, clock).profile()).toMatchObject({ webOrigin: "http://localhost:5174" });
     expect(JSON.stringify(status)).not.toMatch(/AT1|RT1|DEVICE-SECRET/);
     expect(JSON.stringify(values.get("storage:connection"))).not.toMatch(/AT1|RT1/);
     expect(JSON.parse(values.get("secrets:oauth") as string)).toMatchObject({

@@ -156,6 +156,9 @@ test('opens immutable CV Hub contents in the native diff viewer', async ({
     await expect(panel.getByText('WDJB-MJHT')).toBeVisible()
     await panel.getByRole('button', { name: /acme \/ demo/ }).click({ timeout: 15_000 })
     await panel.getByRole('button', { name: /Change greeting/ }).click()
+    await expect(panel.getByRole('button', { name: 'Open pull request #7 on CV Hub' }))
+      .toHaveText(`${origin}/dashboard/repositories/acme/demo/pulls/7`)
+    await expect(panel.getByRole('button', { name: 'Copy PR link' })).toBeVisible()
     await panel.getByRole('button', { name: 'Open changes in Orca' }).click()
     const review = orcaPage.getByRole('dialog', { name: /acme\/demo #7/ })
     await expect(review).toBeVisible()
@@ -168,7 +171,7 @@ test('opens immutable CV Hub contents in the native diff viewer', async ({
     await review.getByRole('button', { name: 'Close', exact: true }).click()
     await panel.getByRole('tab', { name: /Reviews/ }).click()
     await panel.getByRole('radio', { name: /Approve/ }).check()
-    await expect(panel.getByRole('button', { name: 'Approve', exact: true })).toBeEnabled()
+    await expect(panel.getByRole('button', { name: 'Self approve', exact: true })).toBeEnabled()
     expect(pageErrors).toEqual([])
   } finally {
     server.closeAllConnections()

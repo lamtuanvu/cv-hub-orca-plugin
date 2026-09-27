@@ -1,6 +1,6 @@
 import { PANEL_COMMANDS, PRIVATE_COMMANDS, REVIEW_PROVIDER } from "./panel-contracts";
 
-export const PLUGIN_VERSION = "0.4.0";
+export const PLUGIN_VERSION = "0.5.0";
 
 export const PLUGIN_REPOSITORY_URL = "https://github.com/lamtuanvu/cv-hub-orca-plugin.git";
 
@@ -18,12 +18,12 @@ export function buildManifest() {
     name: "CV Hub",
     version: PLUGIN_VERSION,
     description:
-      "Review CV Hub pull requests in Orca's native diff viewer, check CI and reviews, and search code through MCP. Signs in with CV Hub OAuth in your browser. Requires the lamtuanvu/orca build of Orca (native plugin review host).",
-    engines: { orca: ">=1.4.197" },
+      "Review CV Hub pull requests in Orca's native diff viewer, check CI and reviews, and search code through MCP. Signs in with CV Hub OAuth in your browser. Requires the CV Hub icon and browser-link host in lamtuanvu/orca (PR #4).",
+    engines: { orca: ">=1.4.214" },
     pluginApi: 1,
     main: "main.mjs",
     contributes: {
-      panels: [{ id: "cv-hub", title: "CV Hub", icon: "git-pull-request", entry: "panel.html" }],
+      panels: [{ id: "cv-hub", title: "CV Hub", icon: "cv-hub", entry: "panel.html" }],
       commands: [
         ...Object.entries(PANEL_COMMANDS).map(([id, c]) => ({
           id,
@@ -40,6 +40,7 @@ export function buildManifest() {
       { kind: "commands:invoke-own" },
       { kind: "diffs:open" },
       { kind: "browser:authorize" },
+      { kind: "browser:open-external" },
       { kind: "workspace:read" },
     ],
   };

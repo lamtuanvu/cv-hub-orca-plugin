@@ -7,9 +7,9 @@
       "source": {
         "kind": "git",
         "url": "https://github.com/lamtuanvu/cv-hub-orca-plugin.git",
-        "ref": "plugin-v0.4.0"
+        "ref": "plugin-v0.5.0"
       },
-      "description": "Review CV Hub pull requests in Orca's native diff viewer, check CI and reviews, and search code through MCP. Signs in with CV Hub OAuth in your browser. Requires the lamtuanvu/orca build of Orca (native plugin review host).",
+      "description": "Review CV Hub pull requests in Orca's native diff viewer, check CI and reviews, and search code through MCP. Signs in with CV Hub OAuth in your browser. Requires the CV Hub icon and browser-link host in lamtuanvu/orca (PR #4).",
       "categories": [
         "source-control",
         "code-review"

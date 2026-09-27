@@ -14,4 +14,4 @@ if (git("status", "--porcelain").trim()) throw new Error("Use a clean isolated O
 const patch = fileURLToPath(new URL(`../host-patches/${metadata.patch}`, import.meta.url));
 git("apply", "--check", patch);
 git("apply", patch);
-console.log("Applied native review host extension. Build Orca from this checkout.");
+console.log("Applied CV Hub icon and browser-link host extension. Build Orca from this checkout.");
