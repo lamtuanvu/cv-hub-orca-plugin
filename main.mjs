@@ -11340,6 +11340,16 @@ var coerce = {
 };
 var NEVER = INVALID;
 
+// src/shared/pull-url.ts
+function pullWebUrl(origin, pull, webOrigin) {
+  const url2 = new URL(webOrigin ?? origin);
+  if (!webOrigin) url2.hostname = url2.hostname.replace(/^api\./, "");
+  url2.pathname = `/dashboard/repositories/${encodeURIComponent(pull.owner)}/${encodeURIComponent(pull.repo)}/pulls/${pull.number}`;
+  url2.search = "";
+  url2.hash = "";
+  return url2.href;
+}
+
 // src/worker/connection.ts
 import { randomUUID } from "node:crypto";
 
@@ -11481,6 +11491,7 @@ var profileSchema = external_exports.object({
   kind: external_exports.literal("oauth"),
   connectionId: external_exports.string(),
   origin: external_exports.string(),
+  webOrigin: external_exports.string().optional(),
   mcpUrl: external_exports.string(),
   username: external_exports.string(),
   userId: external_exports.string(),
@@ -11576,6 +11587,7 @@ var Connection = class {
     return {
       connection: profile.success ? {
         origin: profile.data.origin,
+        webOrigin: profile.data.webOrigin ?? null,
         mcpUrl: profile.data.mcpUrl,
         username: profile.data.username,
         userId: profile.data.userId,
@@ -11757,6 +11769,7 @@ var Connection = class {
       kind: "oauth",
       connectionId: randomUUID(),
       origin: attempt2.origin,
+      ...attempt2.verifiedUrl ? { webOrigin: new URL(safeBrowserUrl(attempt2.verifiedUrl)).origin } : {},
       mcpUrl: mcpUrl.href,
       username: user.username,
       userId: user.id,
@@ -21051,6 +21064,7 @@ var ATTEMPT_PHASES = ["pending", "denied", "expired", "offline", "invalid_client
 var BROWSER_STATES = ["idle", "confirming", "opened", "declined", "unavailable", "unverified", "rate_limited", "invalidated"];
 var connection = obj({
   origin: str(2048),
+  webOrigin: nullable2(str(2048)),
   mcpUrl: str(2048),
   username: str(256),
   userId: str(256),
@@ -21169,6 +21183,12 @@ var PANEL_COMMANDS = {
     effect: "write",
     input: obj({ owner, repo, number: number4, action: str(16, { enum: [...PULL_ACTIONS] }) }),
     output: obj({ state: str(32), isDraft: bool() })
+  },
+  "cvhub.openPullRequest": {
+    title: "CV Hub: Open pull request in browser",
+    effect: "write",
+    input: obj({ owner, repo, number: number4 }),
+    output: obj({ opened: bool() })
   },
   "cvhub.getPullChecks": {
     title: "CV Hub: Pull request checks",
@@ -21565,6 +21585,17 @@ function registerCommands(orca, fetcher, clock) {
       return { id: clip(result.review.id, 64), state: clip(result.review.state, 32) };
     }
   );
+  panel("openPullRequest", async (args) => {
+    const { connection: signedIn } = await connection2.status();
+    if (!signedIn) throw new CvHubError("signed_out", "Sign in to CV Hub before opening a pull request");
+    try {
+      return external_exports.object({ opened: external_exports.boolean() }).parse(
+        await orca.host.call("browser.openExternal", { url: pullWebUrl(signedIn.origin, args, signedIn.webOrigin) })
+      );
+    } catch {
+      return { opened: false };
+    }
+  });
   panel("searchCode", async (args) => {
     const client = await connection2.client();
     const results = await searchCode(client, args);
