@@ -1,46 +1,106 @@
-import { readFile } from "node:fs/promises";
-import { Script } from "node:vm";
+import { readFile, readdir } from "node:fs/promises";
 import assert from "node:assert/strict";
-const root = new URL("../dist/", import.meta.url);
-const html = await readFile(new URL("panel.html", root), "utf8");
-const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
-assert.equal(scripts.length, 1, "Package must contain one complete inline panel script");
-new Script(scripts[0][1]);
-const { default: activate } = await import(new URL("main.mjs", root));
+import Ajv2020 from "ajv/dist/2020.js";
+import { loadOrcaManifestSchema } from "./orca-schema.mjs";
+
+const dist = new URL("../dist/", import.meta.url);
+const manifest = JSON.parse(await readFile(new URL("orca-plugin.json", dist), "utf8"));
+
+// 1. The generated manifest matches Orca's published format-2 schema, the same check
+//    src/shared/manifest.test.ts runs against the in-memory manifest.
+const schema = await loadOrcaManifestSchema();
+const ajv = new Ajv2020({ strict: false, allErrors: true });
+const validate = ajv.compile(schema);
+assert.ok(validate(manifest), `orca-plugin.json violates the schema: ${ajv.errorsText(validate.errors)}`);
+
+// 2. Everything the manifest names exists, and dist/ holds nothing else (no stale panel.js;
+//    the versioned zips this pipeline produces are packaging artifacts, not plugin files).
+const present = new Set(await readdir(dist));
+const expected = new Set(["orca-plugin.json", manifest.main, ...manifest.contributes.panels.map((panel) => panel.entry)]);
+for (const file of expected) assert.ok(present.has(file), `dist/${file} is missing`);
+for (const file of present)
+  assert.ok(expected.has(file) || /^cv-hub-.*\.zip$/.test(file), `dist/${file} is not part of the plugin (stale file)`);
+assert.equal(manifest.contributes.panels[0].ui, "html");
+assert.equal(manifest.contributes.panels[0].icon, "code");
+
+// 3. The worker activates against a stand-in host and registers exactly what the manifest
+//    declares: the three commands, and the panel handlers the panel requests.
+const DEFAULT_ORIGIN = "https://api.hub.controlvector.io";
+const handlers = new Map();
 const commands = new Map();
-activate({
-  commands: {
-    register(id, handler) {
-      commands.set(id, handler);
+const posts = [];
+const calls = [];
+const orca = {
+  api: { major: 1, minor: 10 },
+  commands: { register: (id, handler) => (commands.set(id, handler), { dispose() {} }) },
+  events: { on: () => ({ dispose() {} }) },
+  host: {
+    has: (method) => ["statusBar.update", "workspace.list", "notifications.show"].includes(method),
+    call: async (method, params) => {
+      calls.push({ method, params });
+      return { ok: true };
     },
   },
-  host: { call: async () => ({ value: null }) },
-});
-const manifest = JSON.parse(await readFile(new URL("orca-plugin.json", root), "utf8"));
-assert.deepEqual(
-  [...commands.keys()].sort(),
-  manifest.contributes.commands.map((c) => c.id).sort(),
-);
-assert.deepEqual(await commands.get("cvhub.authStatus")(), {
-  connection: null,
-  legacy: null,
-  attempt: null,
-});
-// The hardened Orca host rejects panel dispatch of anything without a contract; make sure the
-// review loaders stay private and the provider points at them.
-const byId = new Map(manifest.contributes.commands.map((c) => [c.id, c]));
-for (const provider of manifest.contributes.reviewProviders ?? []) {
-  for (const id of [provider.snapshotCommand, provider.contentCommand]) {
-    assert.ok(byId.has(id), `${id} is declared`);
-    assert.equal(byId.get(id).panel, undefined, `${id} must not be panel-callable`);
-  }
+  panels: {
+    handle: (name, handler) => (handlers.set(name, handler), { dispose() {} }),
+    post: (event, payload) => posts.push({ event, payload }),
+  },
+  storage: {
+    get: async () => null,
+    set: async () => {},
+    delete: async () => {},
+    keys: async () => [],
+    onDidChange: () => ({ dispose() {} }),
+  },
+  secrets: { get: async () => null, set: async () => {}, delete: async () => {} },
+  settings: {
+    get: async (key) => (key === "apiOrigin" ? DEFAULT_ORIGIN : undefined),
+    set: async () => {},
+    onDidChange: () => ({ dispose() {} }),
+  },
+  grantedCapabilities: [],
+  log: () => {},
+};
+const { default: activate, deactivate } = await import(new URL("main.mjs", dist));
+await activate(orca);
+try {
+  assert.deepEqual(
+    [...commands.keys()].sort(),
+    manifest.contributes.commands.map((c) => c.id).sort(),
+    "the worker registers exactly the manifest's commands",
+  );
+  assert.deepEqual([...handlers.keys()].sort(), [
+    "auth.cancel",
+    "auth.signOut",
+    "auth.start",
+    "auth.status",
+    "code.search",
+    "context.current",
+    "pull.checks",
+    "pull.diff",
+    "pull.get",
+    "pull.reviews",
+    "pulls.list",
+    "repos.list",
+    "review.submit",
+  ]);
+  assert.deepEqual(await handlers.get("auth.status")({}, {}), {
+    connection: null,
+    legacy: null,
+    attempt: null,
+    apiOrigin: DEFAULT_ORIGIN,
+  });
+  // The worker announced the signed-out state to any open panel and the status bar.
+  assert.ok(posts.some((p) => p.event === "auth.changed" && p.payload.status.connection === null));
+  assert.ok(calls.some((c) => c.method === "statusBar.update" && c.params.text === "CV Hub: sign in"));
+  // A request the worker never declared must be refused by Orca, not answered here.
+  assert.equal(handlers.get("cvhub.getReview"), undefined);
+} finally {
+  await deactivate(); // clears the status-bar timer so this script can exit
 }
-assert.ok(manifest.capabilities.some((c) => c.kind === "browser:open-external"), "PR links require browser:open-external");
-assert.equal(manifest.contributes.panels[0].icon, "cv-hub");
-// The committed marketplace index must list this exact build under its release tag.
-const marketplace = JSON.parse(await readFile(new URL("../orca-marketplace.json", root), "utf8"));
-assert.deepEqual(
-  marketplace.plugins.map((p) => [p.id, p.source.kind, p.source.ref]),
-  [[`${manifest.publisher}.${manifest.id}`, "git", `plugin-v${manifest.version}`]],
-);
-console.log("Packaged worker activation, manifest contracts and inline panel syntax passed");
+// 4. The built panel boots against a stand-in frame (a stub DOM and `window.orca`), and
+//    the flows a person uses render: sign-in, the workspace repository, the pull request
+//    detail, the in-panel Files diff and the external links.
+const { smokePanel } = await import("./smoke-panel.mjs");
+await smokePanel();
+console.log("Packaged manifest schema, dist contents and worker activation passed");

@@ -1,17 +1,7 @@
-import { z } from "zod";
 import { isLoopback } from "./rest-client";
 
 export type RepoRef = { owner: string; repo: string };
-
-/** Orca's `workspace.readContext`. `remotes` exists only on hosts that report them. */
-export const workspaceContextSchema = z
-  .object({
-    branch: z.string(),
-    displayName: z.string(),
-    remotes: z.array(z.object({ name: z.string(), url: z.string() })).optional(),
-  })
-  .passthrough()
-  .nullable();
+export type Remote = { name: string; url: string };
 
 /** Host and path of a git remote, in URL (`https://host/o/r.git`, `ssh://git@host/o/r`) or
  *  scp-like (`git@host:o/r.git`) form. */
@@ -48,7 +38,7 @@ export function repoFromRemote(apiOrigin: string, url: string): RepoRef | null {
 }
 
 /** Candidates in the order to try: `origin` first, then the other remotes, without duplicates. */
-export function candidateRepos(apiOrigin: string, remotes: Array<{ name: string; url: string }>): RepoRef[] {
+export function candidateRepos(apiOrigin: string, remotes: Remote[]): RepoRef[] {
   const ordered = [...remotes].sort((a, b) => Number(b.name === "origin") - Number(a.name === "origin"));
   const seen = new Set<string>();
   const out: RepoRef[] = [];
@@ -61,4 +51,18 @@ export function candidateRepos(apiOrigin: string, remotes: Array<{ name: string;
     }
   }
   return out;
+}
+
+/** `git remote -v` output: `name<TAB>url (fetch)` and `name<TAB>url (push)` lines, one
+ *  remote per name (the fetch URL, which is the one cloning uses). */
+export function remotesFromGitOutput(stdout: string): Remote[] {
+  const byName = new Map<string, Remote>();
+  for (const line of stdout.split("\n")) {
+    const match = /^(\S+)\t(\S+) \((fetch|push)\)$/.exec(line.trim());
+    if (!match) continue;
+    const [, name, url, kind] = match;
+    if (kind === "push") continue;
+    if (!byName.has(name)) byName.set(name, { name, url });
+  }
+  return [...byName.values()];
 }

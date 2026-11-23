@@ -1,7 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import type { Orca } from "../shared/contracts";
-import { BROWSER_STATES } from "../shared/panel-contracts";
 import {
   CvHubError,
   RestClient,
@@ -32,6 +30,21 @@ const realClock: Clock = {
   clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
 };
 
+/** The worker's own storage and secrets, the only places the connection persists anything.
+ *  Tokens go to secrets only; profile metadata uses plugin storage. */
+export type ConnectionPort = {
+  storage: {
+    get(key: string): Promise<unknown>;
+    set(key: string, value: unknown): Promise<void>;
+    delete(key: string): Promise<void>;
+  };
+  secrets: {
+    get(key: string): Promise<string | null>;
+    set(key: string, value: string): Promise<void>;
+    delete(key: string): Promise<void>;
+  };
+};
+
 const profileSchema = z.object({
   kind: z.literal("oauth"),
   connectionId: z.string(),
@@ -54,12 +67,10 @@ const tokensSchema = z.object({
 type Profile = z.infer<typeof profileSchema>;
 type Tokens = z.infer<typeof tokensSchema>;
 
-export type BrowserState = (typeof BROWSER_STATES)[number];
 export type AttemptPhase =
   | "pending"
   | "denied"
   | "expired"
-  | "offline"
   | "invalid_client"
   | "error"
   | "connected";
@@ -78,11 +89,6 @@ type Attempt = {
   message?: string;
   /** The verification URL checked against the server's discovery metadata, or null. */
   verifiedUrl: string | null;
-  browser: BrowserState;
-  browserMessage?: string;
-  /** Orca's browser-authorization handle. Worker-only: never sent to the panel. */
-  hostAttempt?: string;
-  opening?: boolean;
 };
 const deviceAuthorizationSchema = z.object({
   device_code: z.string().min(1),
@@ -105,9 +111,7 @@ const oauthErrorSchema = z.object({
 });
 
 const UNVERIFIED =
-  "Orca can’t confirm this address belongs to your CV Hub server, so it won’t open it. Enter the code there yourself only if you trust the address.";
-const UNAVAILABLE =
-  "This Orca build can’t open the browser for plugins (it needs the browser:authorize host, lamtuanvu/orca 75b02825). Open the address below yourself.";
+  "Orca couldn’t confirm this address belongs to your CV Hub server, so it won’t offer to open it. Copy the address and open it yourself only if you trust it.";
 /** Only http(s), HTTPS unless loopback, and no embedded credentials may reach the browser. */
 export function safeBrowserUrl(value: string): string {
   const url = new URL(value);
@@ -124,25 +128,24 @@ export class Connection {
   private refreshing: Promise<string> | null = null;
   private changing = false;
   constructor(
-    private readonly host: Orca["host"],
+    private readonly port: ConnectionPort,
     private readonly fetcher: Fetch = fetch,
     private readonly clock: Clock = realClock,
+    /** Called after every state change the panel should hear about; the worker
+     *  turns it into an `auth.changed` post. */
+    private readonly onChange?: () => void,
   ) {}
 
   // ---------- storage ----------
   private async stored(): Promise<unknown> {
-    return z
-      .object({ value: z.unknown() })
-      .parse(await this.host.call("storage.get", { key: "connection" })).value;
+    return await this.port.storage.get("connection");
   }
   async profile(): Promise<Profile | null> {
     const parsed = profileSchema.safeParse(await this.stored());
     return parsed.success ? parsed.data : null;
   }
   private async tokens(): Promise<Tokens | null> {
-    const { value } = z
-      .object({ value: z.string().nullable() })
-      .parse(await this.host.call("secrets.get", { key: "oauth" }));
+    const value = await this.port.secrets.get("oauth");
     if (!value) return null;
     try {
       return tokensSchema.parse(JSON.parse(value));
@@ -151,7 +154,7 @@ export class Connection {
     }
   }
   private async saveTokens(tokens: Tokens) {
-    await this.host.call("secrets.set", { key: "oauth", value: JSON.stringify(tokens) });
+    await this.port.secrets.set("oauth", JSON.stringify(tokens));
   }
 
   // ---------- public status (safe for the panel) ----------
@@ -163,12 +166,11 @@ export class Connection {
       origin: a.origin,
       phase: a.phase,
       userCode: a.userCode,
-      // The address to copy for manual navigation: the pre-filled link when it was verified.
+      // The address to open: the pre-filled link when it was verified, else the raw one.
       verificationUri: a.verifiedUrl ?? a.verificationUri,
+      verified: a.verifiedUrl !== null,
       expiresAt: a.expiresAt,
       message: a.message ?? null,
-      browser: a.browser,
-      browserMessage: a.browserMessage ?? null,
     };
   }
   async status() {
@@ -214,9 +216,9 @@ export class Connection {
   }
 
   // ---------- device authorization ----------
-  async start(args: unknown) {
+  async start(originInput: string) {
     if (this.changing) throw new CvHubError("busy", "A connection change is already in progress");
-    const origin = normalizeOrigin(z.object({ origin: z.string().max(2048) }).parse(args).origin);
+    const origin = normalizeOrigin(originInput);
     this.cancelAttempt();
     const generation = ++this.generation;
     const result = await this.form(origin, "/oauth/device/authorize", {
@@ -255,11 +257,11 @@ export class Connection {
       intervalS: Math.max(1, device.interval ?? 5),
       deviceCode: device.device_code,
       verifiedUrl,
-      browser: verifiedUrl ? "idle" : "unverified",
-      browserMessage: verifiedUrl ? undefined : UNVERIFIED,
+      message: verifiedUrl ? undefined : UNVERIFIED,
     };
     this.schedulePoll(this.attempt);
-    return this.attemptView();
+    this.changed();
+    return this.attemptView()!;
   }
   /** The device response names a browser destination; accept it only when it is CV Hub's
    *  approval page (`/device`) on a host that belongs to this deployment: the API's own origin,
@@ -291,13 +293,10 @@ export class Connection {
     attempt.phase = phase;
     attempt.message = message;
     attempt.deviceCode = "";
-    this.releaseHost(attempt);
+    this.changed();
   }
-  /** Cancel Orca's browser handle: on completion, denial, failure, cancellation and after use. */
-  private releaseHost(attempt: Attempt) {
-    const id = attempt.hostAttempt;
-    attempt.hostAttempt = undefined;
-    if (id) void this.host.call("browser.cancelAuthorization", { attemptId: id }).catch(() => undefined);
+  private changed() {
+    this.onChange?.();
   }
   private async poll(attempt: Attempt, backoffS = 0) {
     if (!this.current(attempt) || attempt.phase !== "pending") return;
@@ -386,13 +385,13 @@ export class Connection {
         expiresAt: this.clock.now() + (token.expires_in ?? 3600) * 1000,
       });
       try {
-        await this.host.call("storage.set", { key: "connection", value: profile });
+        await this.port.storage.set("connection", profile);
       } catch {
-        await this.host.call("secrets.delete", { key: "oauth" });
+        await this.port.secrets.delete("oauth");
         throw new CvHubError("storage", "Could not save the connection");
       }
       // A PAT from the previous plugin version is replaced, never reused as an OAuth token.
-      await this.host.call("secrets.delete", { key: "pat" }).catch(() => undefined);
+      await this.port.secrets.delete("pat").catch(() => undefined);
     } finally {
       this.changing = false;
     }
@@ -411,85 +410,23 @@ export class Connection {
     if (!this.attempt) return;
     this.clock.clearTimeout(this.attempt.timer);
     this.attempt.deviceCode = "";
-    this.releaseHost(this.attempt);
     this.attempt = null;
   }
-  cancel(args: unknown) {
-    const { attemptId } = z.object({ attemptId: z.string().optional() }).parse(args ?? {});
+  cancel(attemptId?: string) {
     if (this.attempt && (!attemptId || this.attempt.attemptId === attemptId)) {
       this.cancelAttempt();
       this.generation++;
+      this.changed();
     }
     return this.status();
-  }
-  /** Starts Orca's browser hand-off without waiting for it: the host shows a native
-   *  confirmation that can take arbitrarily long, and worker commands time out after 30 s.
-   *  The outcome is reported through status(). The panel never sees Orca's handle. */
-  openVerification(args: unknown) {
-    const { attemptId } = z.object({ attemptId: z.string() }).parse(args);
-    const a = this.attempt;
-    if (!a || a.attemptId !== attemptId || a.phase !== "pending")
-      throw new CvHubError("no_attempt", "This sign-in request is no longer active");
-    const view = () => ({ requested: a.opening === true, browser: a.browser, browserMessage: a.browserMessage ?? null });
-    if (!a.verifiedUrl || a.opening) return view();
-    a.opening = true;
-    a.browser = "confirming";
-    a.browserMessage = undefined;
-    void this.handOff(a);
-    return view();
-  }
-  private async handOff(a: Attempt) {
-    try {
-      this.releaseHost(a); // a consumed or stale handle blocks creating a new one
-      const expiresIn = Math.min(900, Math.floor((a.expiresAt - this.clock.now()) / 1000));
-      if (expiresIn < 1) return this.finish(a, "expired");
-      const created = z
-        .object({ attemptId: z.string(), expiresAt: z.number() })
-        .parse(
-          await this.host.call("browser.createAuthorization", {
-            serverOrigin: a.origin,
-            verificationUrl: a.verifiedUrl,
-            expiresIn,
-          }),
-        );
-      if (!this.current(a) || a.phase !== "pending") {
-        void this.host.call("browser.cancelAuthorization", { attemptId: created.attemptId }).catch(() => undefined);
-        return;
-      }
-      a.hostAttempt = created.attemptId;
-      const result = z
-        .object({ opened: z.boolean() })
-        .parse(await this.host.call("browser.openAuthorization", { attemptId: created.attemptId }));
-      if (!this.current(a)) return;
-      a.browser = result.opened ? "opened" : "declined";
-      a.browserMessage = result.opened ? undefined : "You declined opening the browser. Continue again, or open the address yourself.";
-      this.releaseHost(a); // single-use: free the slot so a later retry can create a new one
-    } catch (error) {
-      if (!this.current(a)) return;
-      const text = error instanceof Error ? error.message : "";
-      if (/rate limited|already pending/i.test(text)) {
-        a.browser = "rate_limited";
-        a.browserMessage = "Orca allows one browser request every few seconds. Try again shortly.";
-      } else if (/Authorization unavailable|Plugin unavailable/i.test(text)) {
-        a.browser = "invalidated";
-        a.browserMessage = "Orca reset this browser request (the plugin was refreshed or updated). Choose Continue in browser again.";
-      } else if (/confirmation pending/i.test(text)) {
-        a.browser = "confirming";
-      } else {
-        a.browser = "unavailable";
-        a.browserMessage = UNAVAILABLE;
-      }
-      this.releaseHost(a);
-    } finally {
-      a.opening = false;
-    }
   }
 
   // ---------- tokens for API calls ----------
   private async markExpired(profile: Profile) {
     if ((await this.profile())?.connectionId !== profile.connectionId) return;
-    await this.host.call("secrets.delete", { key: "oauth" });
-    await this.host.call("storage.set", { key: "connection", value: { ...profile, expired: true } });
+    await this.port.secrets.delete("oauth");
+    await this.port.storage.set("connection", { ...profile, expired: true });
+    this.changed();
   }
   private async refresh(profile: Profile, tokens: Tokens): Promise<string> {
     if (!this.refreshing)
@@ -547,9 +484,9 @@ export class Connection {
     try {
       const profile = await this.profile();
       const tokens = await this.tokens();
-      await this.host.call("storage.delete", { key: "connection" });
-      await this.host.call("secrets.delete", { key: "oauth" });
-      await this.host.call("secrets.delete", { key: "pat" });
+      await this.port.storage.delete("connection");
+      await this.port.secrets.delete("oauth");
+      await this.port.secrets.delete("pat");
       if (profile && tokens) {
         for (const [token, hint] of [
           [tokens.refreshToken, "refresh_token"],
@@ -563,6 +500,7 @@ export class Connection {
     } finally {
       this.changing = false;
     }
+    this.changed();
     return { signedOut: true, revoked };
   }
 

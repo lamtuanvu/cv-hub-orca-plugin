@@ -1,25 +1,38 @@
+import { execFile as execFileCallback } from "node:child_process";
+import { promisify } from "node:util";
 import { z } from "zod";
-import { pullWebUrl } from "../shared/pull-url";
+import type { OrcaWorkerApi } from "orca/worker";
+import type { Disposable } from "orca/host";
+import type { PluginRequestInput, PluginRequestOutput, PluginRequests } from "orca";
+import { DEFAULT_ORIGIN, STATUS_BAR_ID } from "../shared/manifest";
 import { Connection, type Clock } from "./connection";
-import { DiffCache, fetchDiff, readReviewFile } from "./pr-review";
 import { searchCode } from "./mcp-client";
-import { pullInput, pullPath, type Orca } from "../shared/contracts";
-import { PANEL_COMMANDS, PAGE_SIZE, PRIVATE_COMMANDS } from "../shared/panel-contracts";
-import { PANEL_PAYLOAD_LIMIT, byteLength, compileDataSchema } from "../shared/panel-schema";
+import { diffForPanel, fetchPullDiff, pullInput, pullPath, sha } from "./pull-diff";
 import { CvHubError, type Fetch } from "./rest-client";
-import { candidateRepos, workspaceContextSchema, type RepoRef } from "./workspace-repo";
+import { candidateRepos, remotesFromGitOutput, type Remote, type RepoRef } from "./workspace-repo";
+import type { AuthStatus, WorkspaceMatch } from "../shared/protocol";
 
+const execFile = promisify(execFileCallback);
 const clip = (value: string | null | undefined, max: number) => (value ?? "").slice(0, max);
 const nullableClip = (value: string | null | undefined, max: number) => (value == null ? null : value.slice(0, max));
-/** Keep a list inside Orca's 48 KiB panel budget by shortening one text field per item. */
-function fitBudget<T extends Record<K, string>, K extends string>(wrap: (items: T[]) => unknown, items: T[], field: K, max: number): T[] {
-  let limit = max;
-  let out = items;
-  while (limit > 40 && byteLength(wrap(out)) > PANEL_PAYLOAD_LIMIT - 2048) {
-    limit = Math.floor(limit / 2);
-    out = items.map((item) => ({ ...item, [field]: item[field].slice(0, limit) }));
+const host = (origin: string) => {
+  try {
+    return new URL(origin).host;
+  } catch {
+    return origin;
   }
-  return out;
+};
+
+/** Only a worker-coded error crosses to the panel. Anything else (schema failures, library
+ *  errors, stack traces) becomes a generic message, so no response bodies, headers or tokens
+ *  can leak through an exception. The `[code]` prefix is what the panel reads: Orca maps an
+ *  unknown thrown code to `action_failed` but keeps the message. */
+export function sanitize(error: unknown): CvHubError {
+  if (error instanceof CvHubError) return error;
+  if (error instanceof z.ZodError) return new CvHubError("invalid_response", "CV Hub returned an unexpected response");
+  const text = error instanceof Error ? error.message : "";
+  if (/^\[[a-z_]+\] /.test(text)) return new CvHubError("error", text.slice(0, 600));
+  return new CvHubError("error", "The request failed");
 }
 
 /** The source branch's current head, read from git. The PR's own `sourceSha` is set when the PR
@@ -36,59 +49,242 @@ async function branchHead(
   return head && /^[a-f0-9]{40}$/.test(head) ? head : null;
 }
 
-/** Only a worker-coded error crosses to the panel. Anything else (schema failures, library
- *  errors, stack traces) becomes a generic message, so no response bodies, headers or tokens
- *  can leak through an exception. */
-export function sanitize(error: unknown): Error {
-  if (error instanceof CvHubError) return new Error(error.message.slice(0, 600));
-  if (error instanceof z.ZodError) return new Error("[invalid_response] CV Hub returned an unexpected response");
-  const text = error instanceof Error ? error.message : "";
-  if (/^\[[a-z_]+\] /.test(text)) return new Error(text.slice(0, 600));
-  return new Error("[error] The request failed");
-}
+// ---- request inputs, checked in the worker (the host carries only JSON) ----
+const repoArgs = z.object({ owner: z.string().min(1).max(255), repo: z.string().min(1).max(255) });
+const pullArgs = repoArgs.extend({ number: z.number().int().positive() });
+const listArgs = repoArgs.extend({
+  offset: z.number().int().min(0).max(1_000_000),
+  state: z.enum(["open", "closed", "merged", "all"]),
+  mine: z.boolean(),
+});
+const submitArgs = pullArgs.extend({
+  expectedHeadSha: sha,
+  state: z.enum(["approved", "changes_requested", "commented"]),
+  body: z.string().max(12000),
+});
+const searchArgs = repoArgs.extend({ query: z.string().min(1).max(1000) });
 
-export function registerCommands(orca: Orca, fetcher?: Fetch, clock?: Clock) {
-  const connection = new Connection(orca.host, fetcher, clock);
-  const diffs = new DiffCache();
-  const outputs = new Map(Object.entries(PANEL_COMMANDS).map(([id, c]) => [id, compileDataSchema(c.output)]));
-  const inputs = new Map(Object.entries(PANEL_COMMANDS).map(([id, c]) => [id, compileDataSchema(c.input)]));
-  /** Panel-callable command: validated in and out against the same contract the host enforces. */
-  const panel = (name: string, handler: (args: never) => Promise<unknown> | unknown) => {
-    const id = `cvhub.${name}`;
-    const input = inputs.get(id);
-    const output = outputs.get(id);
-    if (!input || !output) throw new Error(`No panel contract for ${id}`);
-    orca.commands.register(id, async (args) => {
+export type WorkerDeps = { fetcher?: Fetch; clock?: Clock };
+
+/** Everything the plugin's worker does: panel request handlers, the three palette commands,
+ *  workspace-driven repository detection and the status bar item. */
+export function registerPlugin(orca: OrcaWorkerApi, deps: WorkerDeps = {}) {
+  const connection = new Connection(
+    { storage: orca.storage, secrets: orca.secrets },
+    deps.fetcher,
+    deps.clock,
+    () => void publishAuth(),
+  );
+
+  /** The API origin a new sign-in would use: the `apiOrigin` setting, with the server
+   *  plugin 0.5 remembered kept while the setting still holds the default, so an upgrade
+   *  never silently moves a self-hosted user to the public server. An invalid value is
+   *  returned as-is; sign-in then names it and points at Settings. */
+  async function signInOrigin(): Promise<string> {
+    const setting = await orca.settings.get("apiOrigin");
+    const configured = typeof setting === "string" ? setting.trim() : "";
+    if (configured && configured !== DEFAULT_ORIGIN) return configured;
+    const status = await connection.status();
+    return status.connection?.origin ?? status.legacy?.origin ?? (configured || DEFAULT_ORIGIN);
+  }
+  async function authStatus(): Promise<AuthStatus> {
+    const status = await connection.status();
+    return { ...status, apiOrigin: await signInOrigin() };
+  }
+
+  // ---------- pushed state (the panel never polls) ----------
+  let wasConnected = false;
+  async function publishAuth() {
+    let status: AuthStatus;
+    try {
+      status = await authStatus();
+    } catch {
+      return;
+    }
+    orca.panels.post("auth.changed", { status });
+    if (status.connection && !status.connection.expired && !wasConnected) {
+      await orca.host.call("notifications.show", {
+        title: "CV Hub",
+        body: `Signed in to CV Hub as @${status.connection.username}.`,
+      }).catch(() => undefined);
+      void refocus(lastWorkspaceId);
+    }
+    wasConnected = status.connection !== null && !status.connection.expired;
+    void refreshStatusItem();
+  }
+  function publishContext() {
+    orca.panels.post("context.changed", {
+      repository: focused?.repo ?? null,
+      workspace: focusedWhy,
+    });
+  }
+
+  // ---------- repositories known to exist on this connection ----------
+  const known = new Map<string, boolean>();
+  async function exists(
+    client: Awaited<ReturnType<Connection["client"]>>,
+    ref: RepoRef,
+  ): Promise<boolean> {
+    const key = `${client.connectionId}|${ref.owner}/${ref.repo}`.toLowerCase();
+    const cached = known.get(key);
+    if (cached !== undefined) return cached;
+    try {
+      await client.json(`/api/v1/repos/${encodeURIComponent(ref.owner)}/${encodeURIComponent(ref.repo)}`, {}, 256 * 1024);
+      known.set(key, true);
+      return true;
+    } catch (error) {
+      // Only a definite "no" is cached; a network blip is retried on the next poll.
+      if (error instanceof CvHubError && (error.code === "not_found" || error.code === "forbidden")) known.set(key, false);
+      if (known.size > 200) known.clear();
+      return false;
+    }
+  }
+
+  // ---------- repository detection for the focused workspace ----------
+  let lastWorkspaceId: string | undefined;
+  let focused: { repo: RepoRef } | null = null;
+  let focusedWhy: WorkspaceMatch = "no_workspace";
+
+  /** The focused workspace's remotes, read with git directly (no shell, bounded output). */
+  async function remotesForWorkspace(workspaceId: string): Promise<Remote[] | null> {
+    const listed = z
+      .object({ workspaces: z.array(z.object({ id: z.string(), path: z.string() })) })
+      .parse(await orca.host.call("workspace.list"));
+    const workspace = listed.workspaces.find((w) => w.id === workspaceId);
+    if (!workspace) return null;
+    const { stdout } = await execFile("git", ["-C", workspace.path, "remote", "-v"], {
+      timeout: 10_000,
+      maxBuffer: 1024 * 1024,
+    });
+    return remotesFromGitOutput(stdout);
+  }
+
+  /** Maps the focused workspace to a CV Hub repository and publishes the outcome. */
+  // The detection in flight, so `context.current` answers with its result, not a stale one.
+  let refocusing: Promise<void> = Promise.resolve();
+  function refocus(workspaceId?: string): Promise<void> {
+    lastWorkspaceId = workspaceId;
+    const run = detect(workspaceId);
+    refocusing = run.catch(() => undefined);
+    return run;
+  }
+  async function detect(workspaceId?: string): Promise<void> {
+    let found: { repo: RepoRef } | null = null;
+    let why: WorkspaceMatch = workspaceId ? "not_found" : "no_workspace";
+    let remotes: Remote[] | null = null;
+    if (workspaceId) {
       try {
-        const parsed = input.parse(args ?? {});
-        const result = output.parse(await handler(parsed as never));
-        if (byteLength(result) > PANEL_PAYLOAD_LIMIT) throw new CvHubError("too_large", "The result is too large to show");
-        return result;
+        remotes = await remotesForWorkspace(workspaceId);
+      } catch {
+        remotes = null;
+      }
+      if (remotes === null) why = "offline";
+      else if (remotes.length === 0) why = "no_remote";
+      else {
+        const origin = (await connection.profile())?.origin ?? (await signInOrigin());
+        const candidates = candidateRepos(origin, remotes);
+        if (candidates.length === 0) why = "other_server";
+        else
+          try {
+            const client = await connection.client();
+            for (const ref of candidates.slice(0, 4)) {
+              if (await exists(client, ref)) {
+                found = { repo: ref };
+                why = "matched";
+                break;
+              }
+            }
+          } catch {
+            // Signed out or unreachable: the candidates stay unverified, no repo is claimed.
+          }
+      }
+    }
+    // A newer focus change won the race; drop this outcome.
+    if (workspaceId !== lastWorkspaceId) return;
+    focused = found;
+    focusedWhy = why;
+    publishContext();
+    void refreshStatusItem();
+  }
+  const events = orca.events.on("workspace.changed", ({ context }) => {
+    void refocus(context?.workspaceId);
+  });
+
+  // ---------- the status bar item ----------
+  async function updateStatusItem(
+    fields: { text?: string; tone?: "neutral" | "accent"; tooltip?: string; visible?: boolean },
+  ): Promise<void> {
+    // Desktop-only host method; a browser client simply has no status bar.
+    if (!orca.host.has("statusBar.update")) return;
+    await orca.host.call("statusBar.update", { id: STATUS_BAR_ID, ...fields }).catch(() => undefined);
+  }
+  /** `CV Hub: <n> open PRs` for the focused workspace's repository; `CV Hub: sign in`
+   *  when signed out; hidden when signed in with no CV Hub repository detected. */
+  async function refreshStatusItem(): Promise<void> {
+    const status = await connection.status();
+    if (!status.connection || status.connection.expired) {
+      await updateStatusItem({ text: "CV Hub: sign in", tone: "accent", tooltip: "Sign in to CV Hub", visible: true });
+      return;
+    }
+    const repo = focused?.repo;
+    if (!repo) {
+      await updateStatusItem({ visible: false });
+      return;
+    }
+    try {
+      const client = await connection.client();
+      const query = new URLSearchParams({ state: "open", limit: "1" });
+      const { total } = z
+        .object({ total: z.number() })
+        .parse(
+          await client.json(
+            `/api/v1/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.repo)}/pulls?${query}`,
+          ),
+        );
+      const count = Math.max(0, Math.floor(total));
+      await updateStatusItem({
+        text: `CV Hub: ${count} open PR${count === 1 ? "" : "s"}`,
+        tone: "neutral",
+        tooltip: `${repo.owner}/${repo.repo} on ${host(status.connection.origin)}`,
+        visible: true,
+      });
+    } catch {
+      await updateStatusItem({
+        text: "CV Hub",
+        tone: "neutral",
+        tooltip: `${repo.owner}/${repo.repo} — CV Hub is unreachable`,
+        visible: true,
+      });
+    }
+  }
+  const statusTimer = setInterval(() => void refreshStatusItem(), 5 * 60 * 1000);
+
+  // ---------- panel request handlers ----------
+  function handle<K extends keyof PluginRequests>(
+    name: K,
+    handler: (input: PluginRequestInput<K>) => Promise<PluginRequestOutput<K>> | PluginRequestOutput<K>,
+  ): Disposable {
+    return orca.panels.handle(name, async (input: PluginRequestInput<K>) => {
+      try {
+        return await handler(input);
       } catch (error) {
         throw sanitize(error);
       }
     });
-  };
-  /** Worker-private command (native review loaders): never reachable from the panel. */
-  const worker = (name: string, handler: (args: unknown) => Promise<unknown>) => {
-    const id = `cvhub.${name}`;
-    if (!PRIVATE_COMMANDS[id]) throw new Error(`${id} is not a declared private command`);
-    orca.commands.register(id, async (args) => {
-      try {
-        return await handler(args);
-      } catch (error) {
-        throw sanitize(error);
-      }
-    });
-  };
+  }
 
-  panel("authStatus", () => connection.status());
-  panel("authStart", (args) => connection.start(args));
-  panel("authCancel", (args: { attemptId?: string | null }) => connection.cancel({ attemptId: args.attemptId ?? undefined }));
-  panel("authOpenVerification", (args) => connection.openVerification(args));
-  panel("disconnect", () => connection.disconnect());
+  handle("auth.status", () => authStatus());
+  handle("auth.start", async () => await connection.start(await signInOrigin()));
+  handle("auth.cancel", async (input: { attemptId: string | null }) => {
+    const { attemptId } = z.object({ attemptId: z.string().nullable() }).parse(input);
+    await connection.cancel(attemptId ?? undefined);
+    return authStatus();
+  });
+  handle("auth.signOut", () => connection.disconnect());
 
-  panel("listRepositories", async (args: { offset: number; search: string }) => {
+  const PAGE_SIZE = 20;
+  handle("repos.list", async (input: { offset: number; search: string }) => {
+    const args = z.object({ offset: z.number().int().min(0).max(1_000_000), search: z.string().max(100) }).parse(input);
     const client = await connection.client();
     const response = z
       .object({
@@ -109,64 +305,6 @@ export function registerCommands(orca: Orca, fetcher?: Fetch, clock?: Clock) {
     };
   });
 
-  const gateSchema = z
-    .object({
-      approvals: z.number(),
-      required: z.number(),
-      blockedBy: z.array(z.object({ username: z.string() })),
-      nonCountingApprovals: z.number().optional(),
-    })
-    .nullable()
-    .optional()
-    .catch(null);
-  /** Repositories confirmed to exist on this connection, so polling doesn't re-ask CV Hub. */
-  const known = new Map<string, boolean>();
-  const exists = async (client: Awaited<ReturnType<Connection["client"]>>, ref: RepoRef) => {
-    const key = `${client.connectionId}|${ref.owner}/${ref.repo}`.toLowerCase();
-    const cached = known.get(key);
-    if (cached !== undefined) return cached;
-    try {
-      await client.json(`/api/v1/repos/${encodeURIComponent(ref.owner)}/${encodeURIComponent(ref.repo)}`, {}, 256 * 1024);
-      known.set(key, true);
-      return true;
-    } catch (error) {
-      // Only a definite "no" is cached; a network blip is retried on the next poll.
-      if (error instanceof CvHubError && (error.code === "not_found" || error.code === "forbidden")) known.set(key, false);
-      if (known.size > 200) known.clear();
-      return false;
-    }
-  };
-  const remembered = async (connectionId: string): Promise<RepoRef | null> => {
-    const stored = z
-      .object({ value: z.object({ connectionId: z.string(), owner: z.string(), repo: z.string() }).nullable().catch(null) })
-      .catch({ value: null })
-      .parse(await orca.host.call("storage.get", { key: "lastRepository" }));
-    return stored.value && stored.value.connectionId === connectionId ? { owner: stored.value.owner, repo: stored.value.repo } : null;
-  };
-  panel("activeRepository", async () => {
-    const client = await connection.client();
-    let workspace: string = "unsupported";
-    try {
-      const context = workspaceContextSchema.parse(await orca.host.call("workspace.readContext", {}));
-      if (!context) workspace = "no_worktree";
-      else if (context.remotes) {
-        const candidates = candidateRepos(client.origin, context.remotes);
-        workspace = !context.remotes.length ? "no_remote" : !candidates.length ? "other_server" : "not_found";
-        for (const ref of candidates.slice(0, 4))
-          if (await exists(client, ref)) return { repository: ref, source: "workspace", workspace: "matched" };
-      }
-    } catch {
-      // A host without workspace:read (or an older contract) can't say; fall back quietly.
-    }
-    const last = await remembered(client.connectionId);
-    return last ? { repository: last, source: "remembered", workspace } : { repository: null, source: "none", workspace };
-  });
-  panel("rememberRepository", async (args: { owner: string; repo: string }) => {
-    const client = await connection.client();
-    await orca.host.call("storage.set", { key: "lastRepository", value: { connectionId: client.connectionId, ...args } });
-    return { ok: true };
-  });
-
   const pullItem = z.object({
     number: z.number().int().positive(),
     title: z.string(),
@@ -180,7 +318,19 @@ export function registerCommands(orca: Orca, fetcher?: Fetch, clock?: Clock) {
     createdAt: z.string().optional(),
     updatedAt: z.string().optional(),
   });
-  panel("listPulls", async (args: { owner: string; repo: string; offset: number; state: string; mine: boolean }) => {
+  const gateSchema = z
+    .object({
+      approvals: z.number(),
+      required: z.number(),
+      blockedBy: z.array(z.object({ username: z.string() })),
+      nonCountingApprovals: z.number().optional(),
+    })
+    .nullable()
+    .optional()
+    .catch(null);
+
+  handle("pulls.list", async (input: { owner: string; repo: string; offset: number; state: "open" | "closed" | "merged" | "all"; mine: boolean }) => {
+    const args = listArgs.parse(input);
     const client = await connection.client();
     const query = new URLSearchParams({ state: args.state, limit: String(PAGE_SIZE), offset: String(args.offset) });
     if (args.mine) query.set("author", client.userId);
@@ -199,7 +349,9 @@ export function registerCommands(orca: Orca, fetcher?: Fetch, clock?: Clock) {
       total: Math.max(0, Math.floor(response.total)),
     };
   });
-  panel("getPull", async (args: { owner: string; repo: string; number: number }) => {
+
+  handle("pull.get", async (input: { owner: string; repo: string; number: number }) => {
+    const args = pullArgs.parse(input);
     const client = await connection.client();
     const { pullRequest: p } = z.object({ pullRequest: pullItem.extend({ gate: gateSchema }) }).parse(await client.json(pullPath(args)));
     // Merged or closed PRs may have lost their branch; their recorded SHA is the best we have.
@@ -231,47 +383,9 @@ export function registerCommands(orca: Orca, fetcher?: Fetch, clock?: Clock) {
         : null,
     };
   });
-  const requireWrite = (client: { canWrite: boolean }, what: string) => {
-    if (!client.canWrite)
-      throw new CvHubError("read_only", `This sign-in was granted read-only access. Sign in again and allow repo:write to ${what}`);
-  };
-  const stateResult = z.object({ pullRequest: z.object({ state: z.string(), isDraft: z.boolean().optional() }) });
-  panel(
-    "mergePull",
-    async (args: { owner: string; repo: string; number: number; expectedHeadSha: string; method: string }) => {
-      const client = await connection.client();
-      requireWrite(client, "merge pull requests");
-      // Merge exactly what the user looked at: refuse if the branch moved since the panel loaded it.
-      const { pullRequest } = z.object({ pullRequest: pullItem }).parse(await client.json(pullPath(args)));
-      if (pullRequest.state !== "open")
-        throw new CvHubError("rejected", `This pull request is ${pullRequest.state === "draft" ? "a draft" : pullRequest.state}. Reload it`);
-      const head = await branchHead(client, { ...args, sourceBranch: pullRequest.sourceBranch });
-      if (head !== args.expectedHeadSha)
-        throw new CvHubError("stale_revision", "New commits were pushed. Reload the pull request before merging");
-      // Never retried: a lost response is reported as an unknown outcome.
-      const result = stateResult.parse(
-        await client.json(`${pullPath(args)}/merge`, { method: "PUT", body: JSON.stringify({ mergeMethod: args.method }) }),
-      );
-      return { state: clip(result.pullRequest.state, 32) };
-    },
-  );
-  panel("updatePullState", async (args: { owner: string; repo: string; number: number; action: string }) => {
-    const client = await connection.client();
-    requireWrite(client, "change pull requests");
-    const request =
-      args.action === "reopen"
-        ? { path: `${pullPath(args)}/reopen`, init: { method: "POST" } }
-        : {
-            path: pullPath(args),
-            init: {
-              method: "PATCH",
-              body: JSON.stringify(args.action === "close" ? { state: "closed" } : { isDraft: args.action === "draft" }),
-            },
-          };
-    const result = stateResult.parse(await client.json(request.path, request.init));
-    return { state: clip(result.pullRequest.state, 32), isDraft: result.pullRequest.isDraft === true };
-  });
-  panel("getPullChecks", async (args: { owner: string; repo: string; number: number }) => {
+
+  handle("pull.checks", async (input: { owner: string; repo: string; number: number }) => {
+    const args = pullArgs.parse(input);
     const client = await connection.client();
     const result = z
       .object({
@@ -295,7 +409,9 @@ export function registerCommands(orca: Orca, fetcher?: Fetch, clock?: Clock) {
       total: result.checks.length,
     };
   });
-  panel("listReviews", async (args: { owner: string; repo: string; number: number }) => {
+
+  handle("pull.reviews", async (input: { owner: string; repo: string; number: number }) => {
+    const args = pullArgs.parse(input);
     const client = await connection.client();
     const result = z
       .object({
@@ -312,103 +428,130 @@ export function registerCommands(orca: Orca, fetcher?: Fetch, clock?: Clock) {
         ),
       })
       .parse(await client.json(`${pullPath(args)}/reviews`));
-    const reviews = result.reviews.slice(-20).map((r) => ({
+    return {
+      // Newest last, keeping the latest 20.
+      reviews: result.reviews.slice(-20).map((r) => ({
         id: clip(r.id, 64),
         state: clip(r.state, 32),
         body: clip(r.body, 1000),
         commitSha: r.commitSha && /^[a-f0-9]{40}$/.test(r.commitSha) ? r.commitSha : null,
         submittedAt: nullableClip(r.submittedAt ?? r.createdAt, 64),
         reviewer: nullableClip(r.reviewer?.username, 256),
-      }));
-    // Newest last, keeping the latest 20, shortened if needed to stay within the payload budget.
-    return { reviews: fitBudget((items) => ({ reviews: items, total: 0 }), reviews, "body", 1000), total: result.reviews.length };
+      })),
+      total: result.reviews.length,
+    };
   });
-  panel(
-    "submitReview",
-    async (args: { owner: string; repo: string; number: number; expectedHeadSha: string; state: string; body: string }) => {
-      const client = await connection.client();
-      if (!client.canWrite)
-        throw new CvHubError(
-          "read_only",
-          "This sign-in was granted read-only access. Sign in again and allow repo:write to publish reviews",
-        );
-      // Refuse a review of a revision that is no longer the head. CV Hub versions that check
-      // expectedHeadSha themselves answer 409 for a push that lands after this check; older ones
-      // ignore the field, so this check is all that stands between the two.
-      const { pullRequest } = z.object({ pullRequest: pullItem }).parse(await client.json(pullPath(args)));
-      const head = await branchHead(client, { ...args, sourceBranch: pullRequest.sourceBranch });
-      if (head !== args.expectedHeadSha)
-        throw new CvHubError("stale_revision", "The PR changed. Open and review its latest changes before submitting");
-      const result = z
-        .object({ review: z.object({ id: z.string(), state: z.string() }) })
-        .parse(
-          // Never retried: a lost response is reported as an unknown outcome.
-          await client.json(`${pullPath(args)}/reviews`, {
-            method: "POST",
-            body: JSON.stringify({ state: args.state, body: args.body, expectedHeadSha: args.expectedHeadSha }),
-          }),
-        );
-      return { id: clip(result.review.id, 64), state: clip(result.review.state, 32) };
-    },
-  );
-  panel("openPullRequest", async (args: { owner: string; repo: string; number: number }) => {
-    const { connection: signedIn } = await connection.status();
-    if (!signedIn) throw new CvHubError("signed_out", "Sign in to CV Hub before opening a pull request");
-    try {
-      return z.object({ opened: z.boolean() }).parse(
-        await orca.host.call("browser.openExternal", { url: pullWebUrl(signedIn.origin, args, signedIn.webOrigin) }),
+
+  handle("pull.diff", async (input: { owner: string; repo: string; number: number }) => {
+    const args = pullInput.parse(input);
+    const client = await connection.client();
+    const diff = await fetchPullDiff({ json: (path, maxBytes) => client.json(path, {}, maxBytes) }, args);
+    return diffForPanel(diff);
+  });
+
+  handle("review.submit", async (input: { owner: string; repo: string; number: number; expectedHeadSha: string; state: "approved" | "changes_requested" | "commented"; body: string }) => {
+    const args = submitArgs.parse(input);
+    const client = await connection.client();
+    if (!client.canWrite)
+      throw new CvHubError(
+        "read_only",
+        "This sign-in was granted read-only access. Sign in again and allow repo:write to publish reviews",
       );
-    } catch {
-      return { opened: false };
-    }
+    // Refuse a review of a revision that is no longer the head. CV Hub versions that check
+    // expectedHeadSha themselves answer 409 for a push that lands after this check; older ones
+    // ignore the field, so this check is all that stands between the two.
+    const { pullRequest } = z.object({ pullRequest: pullItem }).parse(await client.json(pullPath(args)));
+    const head = await branchHead(client, { ...args, sourceBranch: pullRequest.sourceBranch });
+    if (head !== args.expectedHeadSha)
+      throw new CvHubError("stale_revision", "The PR changed. Open and review its latest changes before submitting");
+    const result = z
+      .object({ review: z.object({ id: z.string(), state: z.string() }) })
+      .parse(
+        // Never retried: a lost response is reported as an unknown outcome.
+        await client.json(`${pullPath(args)}/reviews`, {
+          method: "POST",
+          body: JSON.stringify({ state: args.state, body: args.body, expectedHeadSha: args.expectedHeadSha }),
+        }),
+      );
+    return { id: clip(result.review.id, 64), state: clip(result.review.state, 32) };
   });
-  panel("searchCode", async (args: { owner: string; repo: string; query: string }) => {
+
+  handle("code.search", async (input: { owner: string; repo: string; query: string }) => {
+    const args = searchArgs.parse(input);
     const client = await connection.client();
     const results = await searchCode(client, args);
     const current = await connection.status();
     if (current.connection?.userId !== client.userId || current.connection?.origin !== client.origin)
       throw new CvHubError("connection_changed", "The connection changed. Search again");
-    const items = results.slice(0, 8).map((r) => ({
-      path: clip(r.path, 4096),
-      symbol: clip(r.symbol, 512),
-      line: r.line == null || r.line < 0 ? null : Math.floor(r.line),
-      content: clip(r.content, 1200),
-    }));
-    return { results: fitBudget((list) => ({ results: list }), items, "content", 1200) };
-  });
-
-  // Native review loaders. Orca calls these only through the declared review provider; the
-  // snapshot context (immutable SHAs, connection binding) never reaches the panel.
-  worker("getReview", async (args) => {
-    const input = pullInput.parse(args);
-    const client = await connection.client();
-    const json = (path: string, limit: number) => client.json(path, {}, limit);
-    const [pull, diff] = await Promise.all([
-      client.json(pullPath(input)).then((r) => z.object({ pullRequest: z.object({ title: z.string() }) }).parse(r).pullRequest),
-      fetchDiff({ connectionId: client.connectionId, json }, input),
-    ]);
-    if (diff.files.length > 2000)
-      throw new CvHubError("too_large", "This pull request changes more than 2,000 files, too many for Orca's review");
-    diffs.put(client.connectionId, input, diff);
     return {
-      title: `${input.owner}/${input.repo} #${input.number} · ${pull.title}`.slice(0, 512),
-      revision: diff.headSha,
-      context: { ...input, connectionId: client.connectionId, baseSha: diff.baseSha, headSha: diff.headSha },
-      files: diff.files.map((f) => ({
-        path: f.path,
-        ...(f.oldPath ? { oldPath: f.oldPath } : {}),
-        status: f.status,
-        additions: f.additions,
-        deletions: f.deletions,
-        ...(f.binary ? { binary: true } : {}),
+      results: results.slice(0, 8).map((r) => ({
+        path: clip(r.path, 4096),
+        symbol: clip(r.symbol, 512),
+        line: r.line == null || r.line < 0 ? null : Math.floor(r.line),
+        content: clip(r.content, 1200),
       })),
     };
   });
-  worker("readReviewFile", async (args) => {
-    const client = await connection.client();
-    return readReviewFile(args, { connectionId: client.connectionId, json: (path, limit) => client.json(path, {}, limit) }, diffs);
+
+  handle("context.current", async () => {
+    await refocusing;
+    return { repository: focused?.repo ?? null, workspace: focusedWhy };
   });
+
+  // ---------- palette commands (also what the status bar item runs) ----------
+  async function notify(title: string, body: string) {
+    await orca.host.call("notifications.show", { title, body }).catch(() => undefined);
+  }
+  const commands = [
+    orca.commands.register("cvhub.signIn", async () => {
+      try {
+        const status = await authStatus();
+        if (status.connection && !status.connection.expired) {
+          // The status bar runs this command while signed in; make that press useful.
+          await refreshStatusItem();
+          await notify("CV Hub", `Already signed in as @${status.connection.username}.`);
+          return;
+        }
+        const attempt = await connection.start(status.apiOrigin);
+        await notify(
+          "CV Hub sign-in started",
+          `Open the CV Hub panel in Orca’s right sidebar and continue with code ${attempt.userCode}.`,
+        );
+      } catch (error) {
+        await notify("CV Hub sign-in failed", sanitize(error).message.replace(/^\[[a-z_]+\] /, ""));
+      }
+    }),
+    orca.commands.register("cvhub.signOut", async () => {
+      try {
+        await connection.disconnect();
+        await refreshStatusItem();
+      } catch (error) {
+        await notify("CV Hub sign-out failed", sanitize(error).message.replace(/^\[[a-z_]+\] /, ""));
+      }
+    }),
+    orca.commands.register("cvhub.refresh", async () => {
+      await refocus(lastWorkspaceId);
+      await refreshStatusItem();
+    }),
+  ];
+
+  void publishAuth();
+  void refocus(lastWorkspaceId);
+
+  return () => {
+    clearInterval(statusTimer);
+    events.dispose();
+    for (const command of commands) command.dispose();
+  };
 }
-export default function activate(orca: Orca) {
-  registerCommands(orca);
+
+let cleanup: (() => void) | null = null;
+
+export default function activate(orca: OrcaWorkerApi) {
+  cleanup = registerPlugin(orca);
+}
+
+export async function deactivate() {
+  cleanup?.();
+  cleanup = null;
 }

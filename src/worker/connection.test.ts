@@ -1,41 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { CLIENT_ID, Connection, safeBrowserUrl, type Clock } from "./connection";
-import type { Orca } from "../shared/contracts";
+import { CLIENT_ID, Connection, safeBrowserUrl, type Clock, type ConnectionPort } from "./connection";
 
-type BrowserHost = {
-  create?: (args: unknown) => unknown;
-  open?: (args: { attemptId: string }) => Promise<unknown> | unknown;
-};
-function hostFixture(browser: BrowserHost = {}) {
-  const values = new Map<string, unknown>();
-  const calls: Array<{ method: string; args: unknown }> = [];
-  let hostSeq = 0;
-  const live = new Set<string>();
-  const host: Orca["host"] = {
-    call: async (method, raw) => {
-      calls.push({ method, args: raw });
-      if (method === "browser.createAuthorization") {
-        if (browser.create) return browser.create(raw);
-        if (live.size) throw new Error("Authorization already pending or rate limited");
-        const attemptId = `00000000-0000-4000-8000-00000000000${++hostSeq}`;
-        live.add(attemptId);
-        return { attemptId, expiresAt: Date.now() + 60000 };
-      }
-      if (method === "browser.openAuthorization")
-        return browser.open ? browser.open(raw as { attemptId: string }) : { opened: true };
-      if (method === "browser.cancelAuthorization") {
-        live.delete((raw as { attemptId: string }).attemptId);
-        return { ok: true };
-      }
-      const args = raw as { key: string; value?: unknown };
-      const key = method.split(".")[0] + ":" + args.key;
-      if (method.endsWith(".get")) return { value: values.get(key) ?? null };
-      if (method.endsWith(".set")) values.set(key, args.value);
-      else values.delete(key);
-      return { ok: true };
+function portFixture(seed: Record<string, unknown> = {}) {
+  const storageValues = new Map<string, unknown>(Object.entries(seed));
+  const secretValues = new Map<string, string>();
+  const port: ConnectionPort = {
+    storage: {
+      get: async (key) => storageValues.get(key) ?? null,
+      set: async (key, value) => void storageValues.set(key, value),
+      delete: async (key) => void storageValues.delete(key),
+    },
+    secrets: {
+      get: async (key) => secretValues.get(key) ?? null,
+      set: async (key, value) => void secretValues.set(key, value),
+      delete: async (key) => void secretValues.delete(key),
     },
   };
-  return { values, calls, host };
+  return { port, storageValues, secretValues };
 }
 const settle = async () => {
   for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
@@ -102,7 +83,7 @@ const FULL = "profile repo:read repo:write offline_access";
 
 describe("OAuth device sign-in", () => {
   it("polls through pending and slow_down, then keeps tokens only in the vault", async () => {
-    const { host, values } = hostFixture();
+    const { port, storageValues, secretValues } = portFixture();
     const { clock, advance } = clockFixture();
     const answers = ["authorization_pending", "slow_down", "ok"];
     const s = server({
@@ -120,9 +101,15 @@ describe("OAuth device sign-in", () => {
       },
       ...identity,
     });
-    const c = new Connection(host, s.fetcher, clock);
-    const view = await c.start({ origin: ORIGIN });
-    expect(view).toMatchObject({ phase: "pending", userCode: "WDJB-MJHT" });
+    let changes = 0;
+    const c = new Connection(port, s.fetcher, clock, () => changes++);
+    const view = await c.start(ORIGIN);
+    expect(view).toMatchObject({
+      phase: "pending",
+      userCode: "WDJB-MJHT",
+      verified: true,
+      verificationUri: "http://localhost:5174/device?code=WDJB-MJHT",
+    });
     expect(JSON.stringify(view)).not.toContain("DEVICE-SECRET");
     await advance(5000); // pending
     await advance(5000); // slow_down → interval becomes 10 s
@@ -132,34 +119,36 @@ describe("OAuth device sign-in", () => {
     const status = await c.status();
     expect(status.attempt?.phase).toBe("connected");
     expect(status.connection).toMatchObject({ username: "mara", canWrite: true, expired: false, webOrigin: "http://localhost:5174" });
-    expect(await new Connection(host, s.fetcher, clock).profile()).toMatchObject({ webOrigin: "http://localhost:5174" });
+    expect(await new Connection(port, s.fetcher, clock).profile()).toMatchObject({ webOrigin: "http://localhost:5174" });
     expect(JSON.stringify(status)).not.toMatch(/AT1|RT1|DEVICE-SECRET/);
-    expect(JSON.stringify(values.get("storage:connection"))).not.toMatch(/AT1|RT1/);
-    expect(JSON.parse(values.get("secrets:oauth") as string)).toMatchObject({
+    expect(JSON.stringify(storageValues.get("connection"))).not.toMatch(/AT1|RT1/);
+    expect(JSON.parse(secretValues.get("oauth") as string)).toMatchObject({
       accessToken: "AT1",
       refreshToken: "RT1",
     });
+    // Every phase change reached the panel through the worker's post.
+    expect(changes).toBeGreaterThanOrEqual(2);
   });
 
   it.each([
     ["access_denied", "denied"],
     ["expired_token", "expired"],
   ])("ends the attempt on %s without storing anything", async (error, phase) => {
-    const { host, values } = hostFixture();
+    const { port, storageValues } = portFixture();
     const { clock, advance } = clockFixture();
     const s = server({
       "/oauth/device/authorize": deviceOk,
       "/oauth/token": () => Response.json({ error }, { status: 400 }),
     });
-    const c = new Connection(host, s.fetcher, clock);
-    await c.start({ origin: ORIGIN });
+    const c = new Connection(port, s.fetcher, clock);
+    await c.start(ORIGIN);
     await advance(5000);
     expect((await c.status()).attempt?.phase).toBe(phase);
-    expect(values.size).toBe(0);
+    expect(storageValues.size).toBe(0);
   });
 
   it("backs off while offline and still expires at the server deadline", async () => {
-    const { host } = hostFixture();
+    const { port } = portFixture();
     const { clock, advance } = clockFixture();
     const s = server({
       "/oauth/device/authorize": deviceOk,
@@ -167,8 +156,8 @@ describe("OAuth device sign-in", () => {
         throw new TypeError("network down");
       },
     });
-    const c = new Connection(host, s.fetcher, clock);
-    await c.start({ origin: ORIGIN });
+    const c = new Connection(port, s.fetcher, clock);
+    await c.start(ORIGIN);
     for (let i = 0; i < 40 && (await c.status()).attempt?.phase === "pending"; i++)
       await advance(60_000);
     expect((await c.status()).attempt?.phase).toBe("expired");
@@ -176,16 +165,16 @@ describe("OAuth device sign-in", () => {
   });
 
   it("names an unregistered client instead of a generic failure", async () => {
-    const { host } = hostFixture();
+    const { port } = portFixture();
     const s = server({
       "/oauth/device/authorize": () => Response.json({ error: "invalid_client" }, { status: 400 }),
     });
-    const c = new Connection(host, s.fetcher, clockFixture().clock);
-    await expect(c.start({ origin: ORIGIN })).rejects.toThrow("[invalid_client]");
+    const c = new Connection(port, s.fetcher, clockFixture().clock);
+    await expect(c.start(ORIGIN)).rejects.toThrow("[invalid_client]");
   });
 
   it("never connects a cancelled attempt, and revokes tokens that arrive late", async () => {
-    const { host, values } = hostFixture();
+    const { port, storageValues } = portFixture();
     const { clock, advance } = clockFixture();
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
@@ -198,71 +187,49 @@ describe("OAuth device sign-in", () => {
       "/oauth/revoke": () => new Response(null, { status: 200 }),
       ...identity,
     });
-    const c = new Connection(host, s.fetcher, clock);
-    const { attemptId } = (await c.start({ origin: ORIGIN }))!;
+    const c = new Connection(port, s.fetcher, clock);
+    const { attemptId } = (await c.start(ORIGIN))!;
     const polling = advance(5000);
     await settle();
-    await c.cancel({ attemptId });
+    await c.cancel(attemptId);
     release();
     await polling;
     await settle();
     expect((await c.status()).attempt).toBeNull();
-    expect(values.size).toBe(0);
+    expect(storageValues.size).toBe(0);
     expect(
       s.log.filter((l) => l.path === "/oauth/revoke").map((l) => l.body.get("token")),
     ).toEqual(["LATE-R", "LATE"]);
   });
 
-  it("hands the verified URL to Orca's browser authorization without blocking the command", async () => {
-    let confirm!: (v: { opened: boolean }) => void;
-    const { host, calls } = hostFixture({ open: () => new Promise((r) => (confirm = r)) });
-    const s = server({ "/oauth/device/authorize": deviceOk });
-    const c = new Connection(host, s.fetcher, clockFixture().clock);
-    const { attemptId, browser } = (await c.start({ origin: ORIGIN }))!;
-    expect(browser).toBe("idle");
-    // Returns while Orca's native confirmation is still open.
-    expect(c.openVerification({ attemptId })).toMatchObject({ requested: true, browser: "confirming" });
-    await settle();
-    const create = calls.find((x) => x.method === "browser.createAuthorization")!.args as Record<string, unknown>;
-    expect(create).toEqual({ serverOrigin: ORIGIN, verificationUrl: "http://localhost:5174/device?code=WDJB-MJHT", expiresIn: 900 });
-    confirm({ opened: false });
-    await settle();
-    const view = (await c.status()).attempt!;
-    expect(view).toMatchObject({ browser: "declined", verificationUri: "http://localhost:5174/device?code=WDJB-MJHT" });
-    // The consumed handle was cancelled, so a retry may create a new one.
-    expect(calls.filter((x) => x.method === "browser.cancelAuthorization")).toHaveLength(1);
-    expect(JSON.stringify(await c.status())).not.toContain("00000000-0000-4000-8000");
-    await expect(Promise.resolve().then(() => c.openVerification({ attemptId: "other" }))).rejects.toThrow("[no_attempt]");
-  });
-
-  it("refuses to open a verification URL outside this deployment", async () => {
-    const { host, calls } = hostFixture();
+  it("refuses to offer a verification URL outside this deployment", async () => {
+    const { port } = portFixture();
     const s = server({
       "/oauth/device/authorize": () =>
         Response.json({ device_code: "D", user_code: "WDJB-MJHT", verification_uri: "https://phish.example/device", expires_in: 900, interval: 5 }),
     });
-    const c = new Connection(host, s.fetcher, clockFixture().clock);
-    const { attemptId, browser, browserMessage } = (await c.start({ origin: ORIGIN }))!;
-    expect(browser).toBe("unverified");
-    expect(browserMessage).toContain("won’t open it");
-    expect(c.openVerification({ attemptId })).toMatchObject({ requested: false, browser: "unverified" });
-    expect(calls.some((x) => x.method.startsWith("browser."))).toBe(false);
+    const c = new Connection(port, s.fetcher, clockFixture().clock);
+    const { verified, verificationUri, message } = (await c.start(ORIGIN))!;
+    expect(verified).toBe(false);
+    expect(verificationUri).toBe("https://phish.example/device");
+    expect(message).toContain("trust it");
   });
 
   it("trusts CV Hub's approval page on the API origin or the web host beside an api. host", async () => {
-    const browserFor = async (origin: string, verification: string) => {
+    const verifiedFor = async (origin: string, verification: string) => {
+      const { port } = portFixture();
       const s = server({
         "/oauth/device/authorize": () =>
           Response.json({ device_code: "D", user_code: "C", verification_uri: verification, expires_in: 900 }),
       });
-      return (await new Connection(hostFixture().host, s.fetcher, clockFixture().clock).start({ origin }))!.browser;
+      return (await new Connection(port, s.fetcher, clockFixture().clock).start(origin))!.verified;
     };
     // Production layout: api.hub.example.com serves the API, hub.example.com the web app.
-    expect(await browserFor("https://api.hub.example.com", "https://hub.example.com/device")).toBe("idle");
-    expect(await browserFor("https://api.hub.example.com", "https://api.hub.example.com/device")).toBe("idle");
-    expect(await browserFor("https://hub.example.com", "https://hub.example.com/device")).toBe("idle");
+    expect(await verifiedFor("https://api.hub.example.com", "https://hub.example.com/device")).toBe(true);
+    expect(await verifiedFor("https://api.hub.example.com", "https://api.hub.example.com/device")).toBe(true);
+    expect(await verifiedFor("https://hub.example.com", "https://hub.example.com/device")).toBe(true);
     // Local development: the web app runs on its own loopback port.
-    expect(await browserFor(ORIGIN, "http://localhost:5174/device")).toBe("idle");
+    expect(await verifiedFor(ORIGIN, "http://localhost:5174/device")).toBe(true);
     for (const [origin, url] of [
       ["https://api.hub.example.com", "https://evil.example.com/device"],
       ["https://api.hub.example.com", "https://hub.example.com.evil.example/device"],
@@ -271,45 +238,17 @@ describe("OAuth device sign-in", () => {
       ["https://hub.example.com", "https://example.com/device"],
       ["https://api.hub.example.com", "http://localhost:5174/device"],
     ])
-      expect(await browserFor(origin, url)).toBe("unverified");
+      expect(await verifiedFor(origin, url)).toBe(false);
   });
 
-  it("explains an Orca without browser:authorize and a host rate limit", async () => {
-    const old = hostFixture({ create: () => { throw new Error("unknown method browser.createAuthorization"); } });
-    const s = server({ "/oauth/device/authorize": deviceOk });
-    const c = new Connection(old.host, s.fetcher, clockFixture().clock);
-    const { attemptId } = (await c.start({ origin: ORIGIN }))!;
-    c.openVerification({ attemptId });
-    await settle();
-    expect((await c.status()).attempt).toMatchObject({ browser: "unavailable" });
-    const busy = hostFixture({ create: () => { throw new Error("Authorization already pending or rate limited"); } });
-    const c2 = new Connection(busy.host, s.fetcher, clockFixture().clock);
-    const a2 = (await c2.start({ origin: ORIGIN }))!;
-    c2.openVerification({ attemptId: a2.attemptId });
-    await settle();
-    expect((await c2.status()).attempt).toMatchObject({ browser: "rate_limited" });
-  });
-
-  it("cancels Orca's handle when sign-in ends", async () => {
-    const { host, calls } = hostFixture({ open: () => ({ opened: true }) });
-    const { clock, advance } = clockFixture();
-    const s = server({
-      "/oauth/device/authorize": deviceOk,
-      "/oauth/token": () => Response.json({ error: "access_denied" }, { status: 400 }),
-    });
-    const c = new Connection(host, s.fetcher, clock);
-    const { attemptId } = (await c.start({ origin: ORIGIN }))!;
-    c.openVerification({ attemptId });
-    await settle();
-    await advance(5000);
-    expect((await c.status()).attempt?.phase).toBe("denied");
-    const created = calls.filter((x) => x.method === "browser.createAuthorization").length;
-    expect(calls.filter((x) => x.method === "browser.cancelAuthorization").length).toBeGreaterThanOrEqual(created);
+  it("refuses unsafe verification addresses outright", () => {
+    expect(() => safeBrowserUrl("https://user:pass@hub.example.com/device")).toThrow("[unsafe_url]");
+    expect(() => safeBrowserUrl("ftp://hub.example.com/device")).toThrow("[unsafe_url]");
   });
 });
 
 async function signedIn(extra: Record<string, Route> = {}, scope = FULL) {
-  const h = hostFixture();
+  const p = portFixture();
   const k = clockFixture();
   const refresh: Route =
     extra.refresh ?? (() => Response.json({ access_token: "AT2", refresh_token: "RT2", expires_in: 3600 }));
@@ -323,11 +262,11 @@ async function signedIn(extra: Record<string, Route> = {}, scope = FULL) {
     ...identity,
     ...extra,
   });
-  const c = new Connection(h.host, s.fetcher, k.clock);
-  await c.start({ origin: ORIGIN });
+  const c = new Connection(p.port, s.fetcher, k.clock);
+  await c.start(ORIGIN);
   await k.advance(5000);
   expect((await c.status()).attempt?.phase).toBe("connected");
-  return { ...h, ...k, s, c };
+  return { ...p, ...k, s, c };
 }
 const AFTER_EXPIRY = 1_000_000 + 5000 + 3600_000;
 
@@ -347,7 +286,7 @@ describe("OAuth session", () => {
     const client = await t.c.client();
     await Promise.all([client.json("/api/v1/ping"), client.json("/api/v1/ping")]);
     expect(refreshes).toBe(1);
-    expect(JSON.parse(t.values.get("secrets:oauth") as string)).toMatchObject({
+    expect(JSON.parse(t.secretValues.get("oauth") as string)).toMatchObject({
       accessToken: "AT2",
       refreshToken: "RT2",
     });
@@ -361,7 +300,7 @@ describe("OAuth session", () => {
     });
     t.setNow(AFTER_EXPIRY);
     await expect(t.c.client()).rejects.toThrow("[session_expired]");
-    expect(t.values.has("secrets:oauth")).toBe(false);
+    expect(t.secretValues.has("oauth")).toBe(false);
     expect((await t.c.status()).connection).toMatchObject({ expired: true, username: "mara" });
   });
 
@@ -393,20 +332,22 @@ describe("OAuth session", () => {
   it("clears local credentials on sign-out and reports remote revocation separately", async () => {
     const t = await signedIn({ "/oauth/revoke": () => new Response("", { status: 503 }) });
     expect(await t.c.disconnect()).toEqual({ signedOut: true, revoked: false });
-    expect(t.values.size).toBe(0);
+    expect(t.storageValues.size).toBe(0);
+    expect(t.secretValues.size).toBe(0);
     await expect(t.c.client()).rejects.toThrow("[signed_out]");
   });
 
   it("asks a PAT-era profile to sign in with OAuth and deletes the PAT on success", async () => {
-    const h = hostFixture();
-    h.values.set("storage:connection", {
-      connectionId: "old",
-      origin: ORIGIN,
-      mcpUrl: `${ORIGIN}/mcp`,
-      username: "mara",
-      userId: "u1",
+    const { port, storageValues, secretValues } = portFixture({
+      connection: {
+        connectionId: "old",
+        origin: ORIGIN,
+        mcpUrl: `${ORIGIN}/mcp`,
+        username: "mara",
+        userId: "u1",
+      },
     });
-    h.values.set("secrets:pat", "cv_pat_old");
+    secretValues.set("pat", "cv_pat_old");
     const k = clockFixture();
     const s = server({
       "/oauth/device/authorize": deviceOk,
@@ -414,17 +355,18 @@ describe("OAuth session", () => {
         Response.json({ access_token: "AT1", refresh_token: "RT1", expires_in: 3600, scope: FULL }),
       ...identity,
     });
-    const c = new Connection(h.host, s.fetcher, k.clock);
+    const c = new Connection(port, s.fetcher, k.clock);
     expect((await c.status()).legacy).toEqual({ origin: ORIGIN, username: "mara" });
     await expect(c.client()).rejects.toThrow("[reauth_required]");
-    await c.start({ origin: ORIGIN });
+    await c.start(ORIGIN);
     await k.advance(5000);
-    expect(h.values.has("secrets:pat")).toBe(false);
+    expect(secretValues.has("pat")).toBe(false);
     expect((await c.status()).connection?.username).toBe("mara");
+    expect(storageValues.size).toBe(1);
   });
 
   it("rejects cross-origin MCP discovery before storing credentials", async () => {
-    const h = hostFixture();
+    const { port, storageValues } = portFixture();
     const k = clockFixture();
     const s = server({
       "/oauth/device/authorize": deviceOk,
@@ -434,11 +376,11 @@ describe("OAuth session", () => {
       "/api/mcp/connection-info": () =>
         Response.json({ mcpUrl: "https://evil.example/mcp", transport: "streamable-http" }),
     });
-    const c = new Connection(h.host, s.fetcher, k.clock);
-    await c.start({ origin: ORIGIN });
+    const c = new Connection(port, s.fetcher, k.clock);
+    await c.start(ORIGIN);
     await k.advance(5000);
     expect((await c.status()).attempt).toMatchObject({ phase: "error" });
-    expect(h.values.size).toBe(0);
+    expect(storageValues.size).toBe(0);
     expect(s.log.some((l) => l.path === "/oauth/revoke")).toBe(true);
   });
 });
