@@ -2,7 +2,7 @@
  *  orca-plugin.json (repo root) and dist/, and src/shared/manifest.test.ts
  *  validates the generated object against Orca's published schema. */
 
-export const PLUGIN_VERSION = "0.6.0";
+export const PLUGIN_VERSION = "0.6.1";
 
 export const PLUGIN_REPOSITORY_URL = "https://github.com/lamtuanvu/cv-hub-orca-plugin";
 

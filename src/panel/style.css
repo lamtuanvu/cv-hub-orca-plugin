@@ -151,7 +151,8 @@ html,body{margin:0;height:100%}
 .cv .tag{font-size:11px;line-height:18px;padding:0 6px;border-radius:6px;background:var(--bg3);color:var(--fg)}
 .cv .auth{flex:1;overflow:auto;padding:28px 20px;display:flex;flex-direction:column;align-items:stretch}
 .cv .auth.wide{align-items:center;padding-top:56px}
-.cv .abox{width:100%;max-width:340px;display:flex;flex-direction:column;gap:14px}
+.cv .auth.wide .abox{max-width:480px}
+.cv .abox{width:100%;max-width:none;display:flex;flex-direction:column;gap:14px}
 .cv .brand{display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px}
 .cv .lead{margin:0;color:var(--mut)}
 .cv .fine{margin:0;font-size:12px;color:var(--mut)}
