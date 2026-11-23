@@ -97,7 +97,7 @@ var require_code = __commonJS({
     }
     exports._ = _;
     var plus = new _Code("+");
-    function str2(strs, ...args) {
+    function str(strs, ...args) {
       const expr = [safeStringify(strs[0])];
       let i = 0;
       while (i < args.length) {
@@ -108,7 +108,7 @@ var require_code = __commonJS({
       optimize(expr);
       return new _Code(expr);
     }
-    exports.str = str2;
+    exports.str = str;
     function addCodeArg(code, arg) {
       if (arg instanceof _Code)
         code.push(...arg._items);
@@ -151,7 +151,7 @@ var require_code = __commonJS({
       return;
     }
     function strConcat(c1, c2) {
-      return c2.emptyStr() ? c1 : c1.emptyStr() ? c2 : str2`${c1}${c2}`;
+      return c2.emptyStr() ? c1 : c1.emptyStr() ? c2 : str`${c1}${c2}`;
     }
     exports.strConcat = strConcat;
     function interpolate(x) {
@@ -855,9 +855,9 @@ var require_codegen = __commonJS({
       forOf(nameOrPrefix, iterable, forBody, varKind = scope_1.varKinds.const) {
         const name = this._scope.toName(nameOrPrefix);
         if (this.opts.es5) {
-          const arr2 = iterable instanceof code_1.Name ? iterable : this.var("_arr", iterable);
-          return this.forRange("_i", 0, (0, code_1._)`${arr2}.length`, (i) => {
-            this.var(name, (0, code_1._)`${arr2}[${i}]`);
+          const arr = iterable instanceof code_1.Name ? iterable : this.var("_arr", iterable);
+          return this.forRange("_i", 0, (0, code_1._)`${arr}.length`, (i) => {
+            this.var(name, (0, code_1._)`${arr}[${i}]`);
             forBody(name);
           });
         }
@@ -865,12 +865,12 @@ var require_codegen = __commonJS({
       }
       // `for-in` statement.
       // With option `ownProperties` replaced with a `for-of` loop for object keys
-      forIn(nameOrPrefix, obj2, forBody, varKind = this.opts.es5 ? scope_1.varKinds.var : scope_1.varKinds.const) {
+      forIn(nameOrPrefix, obj, forBody, varKind = this.opts.es5 ? scope_1.varKinds.var : scope_1.varKinds.const) {
         if (this.opts.ownProperties) {
-          return this.forOf(nameOrPrefix, (0, code_1._)`Object.keys(${obj2})`, forBody);
+          return this.forOf(nameOrPrefix, (0, code_1._)`Object.keys(${obj})`, forBody);
         }
         const name = this._scope.toName(nameOrPrefix);
-        return this._for(new ForIter("in", varKind, name, obj2), () => forBody(name));
+        return this._for(new ForIter("in", varKind, name, obj), () => forBody(name));
       }
       // end `for` loop
       endFor() {
@@ -1056,9 +1056,9 @@ var require_util = __commonJS({
     exports.checkStrictMode = exports.getErrorPath = exports.Type = exports.useFunc = exports.setEvaluated = exports.evaluatedPropsToName = exports.mergeEvaluated = exports.eachItem = exports.unescapeJsonPointer = exports.escapeJsonPointer = exports.escapeFragment = exports.unescapeFragment = exports.schemaRefOrVal = exports.schemaHasRulesButRef = exports.schemaHasRules = exports.checkUnknownRules = exports.alwaysValidSchema = exports.toHash = void 0;
     var codegen_1 = require_codegen();
     var code_1 = require_code();
-    function toHash(arr2) {
+    function toHash(arr) {
       const hash = {};
-      for (const item of arr2)
+      for (const item of arr)
         hash[item] = true;
       return hash;
     }
@@ -1113,22 +1113,22 @@ var require_util = __commonJS({
       return (0, codegen_1._)`${topSchemaRef}${schemaPath}${(0, codegen_1.getProperty)(keyword)}`;
     }
     exports.schemaRefOrVal = schemaRefOrVal;
-    function unescapeFragment(str2) {
-      return unescapeJsonPointer(decodeURIComponent(str2));
+    function unescapeFragment(str) {
+      return unescapeJsonPointer(decodeURIComponent(str));
     }
     exports.unescapeFragment = unescapeFragment;
-    function escapeFragment(str2) {
-      return encodeURIComponent(escapeJsonPointer(str2));
+    function escapeFragment(str) {
+      return encodeURIComponent(escapeJsonPointer(str));
     }
     exports.escapeFragment = escapeFragment;
-    function escapeJsonPointer(str2) {
-      if (typeof str2 == "number")
-        return `${str2}`;
-      return str2.replace(/~/g, "~0").replace(/\//g, "~1");
+    function escapeJsonPointer(str) {
+      if (typeof str == "number")
+        return `${str}`;
+      return str.replace(/~/g, "~0").replace(/\//g, "~1");
     }
     exports.escapeJsonPointer = escapeJsonPointer;
-    function unescapeJsonPointer(str2) {
-      return str2.replace(/~1/g, "/").replace(/~0/g, "~");
+    function unescapeJsonPointer(str) {
+      return str.replace(/~1/g, "/").replace(/~0/g, "~");
     }
     exports.unescapeJsonPointer = unescapeJsonPointer;
     function eachItem(xs, f) {
@@ -2153,8 +2153,8 @@ var require_json_schema_traverse = __commonJS({
         post(schema, jsonPtr, rootSchema, parentJsonPtr, parentKeyword, parentSchema, keyIndex);
       }
     }
-    function escapeJsonPtr(str2) {
-      return str2.replace(/~/g, "~0").replace(/\//g, "~1");
+    function escapeJsonPtr(str) {
+      return str.replace(/~/g, "~0").replace(/\//g, "~1");
     }
   }
 });
@@ -2690,11 +2690,11 @@ var require_validate = __commonJS({
         if (!this.allErrors)
           this.gen.if(cond);
       }
-      setParams(obj2, assign) {
+      setParams(obj, assign) {
         if (assign)
-          Object.assign(this.params, obj2);
+          Object.assign(this.params, obj);
         else
-          this.params = obj2;
+          this.params = obj;
       }
       block$data(valid, codeBlock, $dataValid = codegen_1.nil) {
         this.gen.block(() => {
@@ -3223,38 +3223,38 @@ var require_utils = __commonJS({
       for (let i = left.length; i < parts.length; i++) expanded.push(parts[i]);
       return compressIPv6ZeroRun(expanded);
     }
-    function normalizeIPv6(host) {
-      const bracketed = host[0] === "[" && host[host.length - 1] === "]";
-      const hasBracket = host[0] === "[" || host[host.length - 1] === "]";
-      if (hasBracket && !bracketed) return { host, isIPV6: false, error: true };
-      let input = bracketed ? host.slice(1, -1) : host;
+    function normalizeIPv6(host2) {
+      const bracketed = host2[0] === "[" && host2[host2.length - 1] === "]";
+      const hasBracket = host2[0] === "[" || host2[host2.length - 1] === "]";
+      if (hasBracket && !bracketed) return { host: host2, isIPV6: false, error: true };
+      let input = bracketed ? host2.slice(1, -1) : host2;
       if (bracketed && isIPvFuture(input)) {
         input = input.toLowerCase();
         return { host: `[${input}]`, escapedHost: input, isIPV6: false, isIPVFuture: true };
       }
       if (findToken(input, ":") < 2) {
-        return { host, isIPV6: false, error: bracketed };
+        return { host: host2, isIPV6: false, error: bracketed };
       }
       let zoneIdentifier = "";
       const zoneSeparator = input.indexOf("%");
       if (zoneSeparator !== -1) {
         const separatorLength = input.slice(zoneSeparator, zoneSeparator + 3).toLowerCase() === "%25" ? 3 : 1;
         zoneIdentifier = input.slice(zoneSeparator + separatorLength);
-        if (!isZoneIdentifier(zoneIdentifier)) return { host, isIPV6: false, error: true };
+        if (!isZoneIdentifier(zoneIdentifier)) return { host: host2, isIPV6: false, error: true };
         input = input.slice(0, zoneSeparator);
       }
       const address = normalizeIPv6Address(input);
-      if (address === void 0) return { host, isIPV6: false, error: true };
+      if (address === void 0) return { host: host2, isIPV6: false, error: true };
       return {
         host: address + (zoneIdentifier ? "%" + zoneIdentifier : ""),
         escapedHost: address + (zoneIdentifier ? "%25" + zoneIdentifier : ""),
         isIPV6: true
       };
     }
-    function findToken(str2, token) {
+    function findToken(str, token) {
       let ind = 0;
-      for (let i = 0; i < str2.length; i++) {
-        if (str2[i] === token) ind++;
+      for (let i = 0; i < str.length; i++) {
+        if (str[i] === token) ind++;
       }
       return ind;
     }
@@ -3336,10 +3336,10 @@ var require_utils = __commonJS({
     var HOST_DELIMS = { "@": "%40", "/": "%2F", "?": "%3F", "#": "%23", ":": "%3A" };
     var HOST_DELIM_RE = /[@/?#:]/g;
     var HOST_DELIM_NO_COLON_RE = /[@/?#]/g;
-    function reescapeHostDelimiters(host, isIP) {
+    function reescapeHostDelimiters(host2, isIP) {
       const re = isIP ? HOST_DELIM_NO_COLON_RE : HOST_DELIM_RE;
       re.lastIndex = 0;
-      return host.replace(re, (ch) => HOST_DELIMS[ch]);
+      return host2.replace(re, (ch) => HOST_DELIMS[ch]);
     }
     function normalizePercentEncoding(input, decodeUnreserved = false) {
       if (input.indexOf("%") === -1) {
@@ -3555,20 +3555,20 @@ var require_utils = __commonJS({
         uriTokens.push("@");
       }
       if (component.host !== void 0) {
-        let host = component.host;
-        if (!isIPv4(host)) {
-          let ipV6res = normalizeIPv6(host);
+        let host2 = component.host;
+        if (!isIPv4(host2)) {
+          let ipV6res = normalizeIPv6(host2);
           if (ipV6res.isIPV6 !== true && ipV6res.isIPVFuture !== true) {
-            host = normalizePercentEncoding(host, true);
-            ipV6res = normalizeIPv6(host);
+            host2 = normalizePercentEncoding(host2, true);
+            ipV6res = normalizeIPv6(host2);
           }
           if (ipV6res.isIPV6 === true || ipV6res.isIPVFuture === true) {
-            host = `[${ipV6res.escapedHost}]`;
+            host2 = `[${ipV6res.escapedHost}]`;
           } else {
-            host = reescapeHostDelimiters(host, false);
+            host2 = reescapeHostDelimiters(host2, false);
           }
         }
-        uriTokens.push(host);
+        uriTokens.push(host2);
       }
       if (typeof component.port === "number" || typeof component.port === "string") {
         const port = String(component.port);
@@ -4019,12 +4019,12 @@ var require_fast_uri = __commonJS({
       }
       return false;
     }
-    function isIPLiteral(host) {
-      return host[0] === "[" && host[host.length - 1] === "]";
+    function isIPLiteral(host2) {
+      return host2[0] === "[" && host2[host2.length - 1] === "]";
     }
     function hasMalformedComponentPercentEncoding(matches) {
-      const host = matches[4];
-      return hasMalformedPercentEncoding(matches[3]) || host !== void 0 && !isIPLiteral(host) && hasMalformedPercentEncoding(host) || hasMalformedPercentEncoding(matches[6]) || hasMalformedPercentEncoding(matches[7]) || hasMalformedPercentEncoding(matches[8]);
+      const host2 = matches[4];
+      return hasMalformedPercentEncoding(matches[3]) || host2 !== void 0 && !isIPLiteral(host2) && hasMalformedPercentEncoding(host2) || hasMalformedPercentEncoding(matches[6]) || hasMalformedPercentEncoding(matches[7]) || hasMalformedPercentEncoding(matches[8]);
     }
     function canonicalizeHost(parsed, options, schemeHandler, isIP) {
       if (!options.unicodeSupport && (!schemeHandler || !schemeHandler.unicodeSupport) && parsed.host && !isIPLiteral(parsed.host) && (options.domainHost || schemeHandler && schemeHandler.domainHost) && isIP === false && nonSimpleDomain(parsed.host)) {
@@ -4145,11 +4145,11 @@ var require_fast_uri = __commonJS({
           malformedHost = canonicalizeHost(parsed, options, schemeHandler, isIP);
         }
         if (uri.indexOf("%") !== -1 && parsed.host !== void 0 && !malformedIPLiteral) {
-          let host = isIP ? parsed.host : normalizePercentEncoding(parsed.host, true);
+          let host2 = isIP ? parsed.host : normalizePercentEncoding(parsed.host, true);
           if (!isIP) {
-            host = normalizePercentEncoding(host.toLowerCase());
+            host2 = normalizePercentEncoding(host2.toLowerCase());
           }
-          parsed.host = reescapeHostDelimiters(host, isIP);
+          parsed.host = reescapeHostDelimiters(host2, isIP);
         }
         if (!schemeHandler || schemeHandler && !schemeHandler.skipNormalize) {
           if (parsed.path) {
@@ -4268,7 +4268,7 @@ var require_core = __commonJS({
     var util_1 = require_util();
     var $dataRefSchema = require_data();
     var uri_1 = require_uri();
-    var defaultRegExp = (str2, flags) => new RegExp(str2, flags);
+    var defaultRegExp = (str, flags) => new RegExp(str, flags);
     defaultRegExp.code = "new RegExp";
     var META_IGNORE_OPTIONS = ["removeAdditional", "useDefaults", "coerceTypes"];
     var EXT_SCOPE_NAMES = /* @__PURE__ */ new Set([
@@ -4587,12 +4587,12 @@ var require_core = __commonJS({
           return this;
         }
         keywordMetaschema.call(this, def);
-        const definition2 = {
+        const definition = {
           ...def,
           type: (0, dataType_1.getJSONTypes)(def.type),
           schemaType: (0, dataType_1.getJSONTypes)(def.schemaType)
         };
-        (0, util_1.eachItem)(keyword, definition2.type.length === 0 ? (k) => addRule.call(this, k, definition2) : (k) => definition2.type.forEach((t) => addRule.call(this, k, definition2, t)));
+        (0, util_1.eachItem)(keyword, definition.type.length === 0 ? (k) => addRule.call(this, k, definition) : (k) => definition.type.forEach((t) => addRule.call(this, k, definition, t)));
         return this;
       }
       getKeyword(keyword) {
@@ -4785,9 +4785,9 @@ var require_core = __commonJS({
         throw new Error('$data keyword must have "code" or "validate" function');
       }
     }
-    function addRule(keyword, definition2, dataType) {
+    function addRule(keyword, definition, dataType) {
       var _a;
-      const post = definition2 === null || definition2 === void 0 ? void 0 : definition2.post;
+      const post = definition === null || definition === void 0 ? void 0 : definition.post;
       if (dataType && post)
         throw new Error('keyword with "post" flag cannot have "type"');
       const { RULES } = this;
@@ -4797,22 +4797,22 @@ var require_core = __commonJS({
         RULES.rules.push(ruleGroup);
       }
       RULES.keywords[keyword] = true;
-      if (!definition2)
+      if (!definition)
         return;
       const rule = {
         keyword,
         definition: {
-          ...definition2,
-          type: (0, dataType_1.getJSONTypes)(definition2.type),
-          schemaType: (0, dataType_1.getJSONTypes)(definition2.schemaType)
+          ...definition,
+          type: (0, dataType_1.getJSONTypes)(definition.type),
+          schemaType: (0, dataType_1.getJSONTypes)(definition.schemaType)
         }
       };
-      if (definition2.before)
-        addBeforeRule.call(this, ruleGroup, rule, definition2.before);
+      if (definition.before)
+        addBeforeRule.call(this, ruleGroup, rule, definition.before);
       else
         ruleGroup.rules.push(rule);
       RULES.all[keyword] = rule;
-      (_a = definition2.implements) === null || _a === void 0 ? void 0 : _a.forEach((kwd) => this.addKeyword(kwd));
+      (_a = definition.implements) === null || _a === void 0 ? void 0 : _a.forEach((kwd) => this.addKeyword(kwd));
     }
     function addBeforeRule(ruleGroup, rule, before) {
       const i = ruleGroup.rules.findIndex((_rule) => _rule.keyword === before);
@@ -5063,16 +5063,16 @@ var require_ucs2length = __commonJS({
   "node_modules/.pnpm/ajv@8.20.0/node_modules/ajv/dist/runtime/ucs2length.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    function ucs2length(str2) {
-      const len = str2.length;
+    function ucs2length(str) {
+      const len = str.length;
       let length = 0;
       let pos = 0;
       let value;
       while (pos < len) {
         length++;
-        value = str2.charCodeAt(pos++);
+        value = str.charCodeAt(pos++);
         if (value >= 55296 && value <= 56319 && pos < len) {
-          value = str2.charCodeAt(pos);
+          value = str.charCodeAt(pos);
           if ((value & 64512) === 56320)
             pos++;
         }
@@ -6955,8 +6955,8 @@ var require_formats = __commonJS({
     }
     var DATE = /^(\d\d\d\d)-(\d\d)-(\d\d)$/;
     var DAYS = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    function date4(str2) {
-      const matches = DATE.exec(str2);
+    function date4(str) {
+      const matches = DATE.exec(str);
       if (!matches)
         return false;
       const year = +matches[1];
@@ -6975,8 +6975,8 @@ var require_formats = __commonJS({
     }
     var TIME = /^(\d\d):(\d\d):(\d\d(?:\.\d+)?)(z|([+-])(\d\d)(?::?(\d\d))?)?$/i;
     function getTime(strictTimeZone) {
-      return function time3(str2) {
-        const matches = TIME.exec(str2);
+      return function time3(str) {
+        const matches = TIME.exec(str);
         if (!matches)
           return false;
         const hr = +matches[1];
@@ -7022,8 +7022,8 @@ var require_formats = __commonJS({
     var DATE_TIME_SEPARATOR = /t|\s/i;
     function getDateTime(strictTimeZone) {
       const time3 = getTime(strictTimeZone);
-      return function date_time(str2) {
-        const dateTime = str2.split(DATE_TIME_SEPARATOR);
+      return function date_time(str) {
+        const dateTime = str.split(DATE_TIME_SEPARATOR);
         return dateTime.length === 2 && date4(dateTime[0]) && time3(dateTime[1]);
       };
     }
@@ -7048,13 +7048,13 @@ var require_formats = __commonJS({
     }
     var NOT_URI_FRAGMENT = /\/|:/;
     var URI = /^(?:[a-z][a-z0-9+\-.]*:)(?:\/?\/(?:(?:[a-z0-9\-._~!$&'()*+,;=:]|%[0-9a-f]{2})*@)?(?:\[(?:(?:(?:(?:[0-9a-f]{1,4}:){6}|::(?:[0-9a-f]{1,4}:){5}|(?:[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){4}|(?:(?:[0-9a-f]{1,4}:){0,1}[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){3}|(?:(?:[0-9a-f]{1,4}:){0,2}[0-9a-f]{1,4})?::(?:[0-9a-f]{1,4}:){2}|(?:(?:[0-9a-f]{1,4}:){0,3}[0-9a-f]{1,4})?::[0-9a-f]{1,4}:|(?:(?:[0-9a-f]{1,4}:){0,4}[0-9a-f]{1,4})?::)(?:[0-9a-f]{1,4}:[0-9a-f]{1,4}|(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?))|(?:(?:[0-9a-f]{1,4}:){0,5}[0-9a-f]{1,4})?::[0-9a-f]{1,4}|(?:(?:[0-9a-f]{1,4}:){0,6}[0-9a-f]{1,4})?::)|[Vv][0-9a-f]+\.[a-z0-9\-._~!$&'()*+,;=:]+)\]|(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)|(?:[a-z0-9\-._~!$&'()*+,;=]|%[0-9a-f]{2})*)(?::\d*)?(?:\/(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*|\/(?:(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)?|(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})+(?:\/(?:[a-z0-9\-._~!$&'()*+,;=:@]|%[0-9a-f]{2})*)*)(?:\?(?:[a-z0-9\-._~!$&'()*+,;=:@/?]|%[0-9a-f]{2})*)?(?:#(?:[a-z0-9\-._~!$&'()*+,;=:@/?]|%[0-9a-f]{2})*)?$/i;
-    function uri(str2) {
-      return NOT_URI_FRAGMENT.test(str2) && URI.test(str2);
+    function uri(str) {
+      return NOT_URI_FRAGMENT.test(str) && URI.test(str);
     }
     var BYTE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/gm;
-    function byte(str2) {
+    function byte(str) {
       BYTE.lastIndex = 0;
-      return BYTE.test(str2);
+      return BYTE.test(str);
     }
     var MIN_INT32 = -(2 ** 31);
     var MAX_INT32 = 2 ** 31 - 1;
@@ -7068,11 +7068,11 @@ var require_formats = __commonJS({
       return true;
     }
     var Z_ANCHOR = /[^\\]\\Z/;
-    function regex(str2) {
-      if (Z_ANCHOR.test(str2))
+    function regex(str) {
+      if (Z_ANCHOR.test(str))
         return false;
       try {
-        new RegExp(str2);
+        new RegExp(str);
         return true;
       } catch (e) {
         return false;
@@ -7207,12 +7207,12 @@ var require_content_type = __commonJS({
     var TYPE_REGEXP = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+\/[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
     exports.format = format;
     exports.parse = parse3;
-    function format(obj2) {
-      if (!obj2 || typeof obj2 !== "object") {
+    function format(obj) {
+      if (!obj || typeof obj !== "object") {
         throw new TypeError("argument obj is required");
       }
-      var parameters = obj2.parameters;
-      var type = obj2.type;
+      var parameters = obj.parameters;
+      var type = obj.type;
       if (!type || !TYPE_REGEXP.test(type)) {
         throw new TypeError("invalid type");
       }
@@ -7243,7 +7243,7 @@ var require_content_type = __commonJS({
       if (!TYPE_REGEXP.test(type)) {
         throw new TypeError("invalid media type");
       }
-      var obj2 = new ContentType(type.toLowerCase());
+      var obj = new ContentType(type.toLowerCase());
       if (index !== -1) {
         var key;
         var match;
@@ -7262,20 +7262,20 @@ var require_content_type = __commonJS({
               value = value.replace(QESC_REGEXP, "$1");
             }
           }
-          obj2.parameters[key] = value;
+          obj.parameters[key] = value;
         }
         if (index !== header.length) {
           throw new TypeError("invalid parameter format");
         }
       }
-      return obj2;
+      return obj;
     }
-    function getcontenttype(obj2) {
+    function getcontenttype(obj) {
       var header;
-      if (typeof obj2.getHeader === "function") {
-        header = obj2.getHeader("content-type");
-      } else if (typeof obj2.headers === "object") {
-        header = obj2.headers && obj2.headers["content-type"];
+      if (typeof obj.getHeader === "function") {
+        header = obj.getHeader("content-type");
+      } else if (typeof obj.headers === "object") {
+        header = obj.headers && obj.headers["content-type"];
       }
       if (typeof header !== "string") {
         throw new TypeError("content-type header is missing from object");
@@ -7283,14 +7283,14 @@ var require_content_type = __commonJS({
       return header;
     }
     function qstring(val) {
-      var str2 = String(val);
-      if (TOKEN_REGEXP.test(str2)) {
-        return str2;
+      var str = String(val);
+      if (TOKEN_REGEXP.test(str)) {
+        return str;
       }
-      if (str2.length > 0 && !TEXT_REGEXP.test(str2)) {
+      if (str.length > 0 && !TEXT_REGEXP.test(str)) {
         throw new TypeError("invalid parameter value");
       }
-      return '"' + str2.replace(QUOTE_REGEXP, "\\$1") + '"';
+      return '"' + str.replace(QUOTE_REGEXP, "\\$1") + '"';
     }
     function ContentType(type) {
       this.parameters = /* @__PURE__ */ Object.create(null);
@@ -7298,6 +7298,10 @@ var require_content_type = __commonJS({
     }
   }
 });
+
+// src/worker/activate.ts
+import { execFile as execFileCallback } from "node:child_process";
+import { promisify } from "node:util";
 
 // node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/external.js
 var external_exports = {};
@@ -7424,26 +7428,26 @@ var util;
   }
   util2.assertNever = assertNever2;
   util2.arrayToEnum = (items) => {
-    const obj2 = {};
+    const obj = {};
     for (const item of items) {
-      obj2[item] = item;
+      obj[item] = item;
     }
-    return obj2;
+    return obj;
   };
-  util2.getValidEnumValues = (obj2) => {
-    const validKeys = util2.objectKeys(obj2).filter((k) => typeof obj2[obj2[k]] !== "number");
+  util2.getValidEnumValues = (obj) => {
+    const validKeys = util2.objectKeys(obj).filter((k) => typeof obj[obj[k]] !== "number");
     const filtered = {};
     for (const k of validKeys) {
-      filtered[k] = obj2[k];
+      filtered[k] = obj[k];
     }
     return util2.objectValues(filtered);
   };
-  util2.objectValues = (obj2) => {
-    return util2.objectKeys(obj2).map(function(e) {
-      return obj2[e];
+  util2.objectValues = (obj) => {
+    return util2.objectKeys(obj).map(function(e) {
+      return obj[e];
     });
   };
-  util2.objectKeys = typeof Object.keys === "function" ? (obj2) => Object.keys(obj2) : (object3) => {
+  util2.objectKeys = typeof Object.keys === "function" ? (obj) => Object.keys(obj) : (object3) => {
     const keys = [];
     for (const key in object3) {
       if (Object.prototype.hasOwnProperty.call(object3, key)) {
@@ -7452,8 +7456,8 @@ var util;
     }
     return keys;
   };
-  util2.find = (arr2, checker) => {
-    for (const item of arr2) {
+  util2.find = (arr, checker) => {
+    for (const item of arr) {
       if (checker(item))
         return item;
     }
@@ -7564,8 +7568,8 @@ var ZodIssueCode = util.arrayToEnum([
   "not_multiple_of",
   "not_finite"
 ]);
-var quotelessJson = (obj2) => {
-  const json = JSON.stringify(obj2, null, 2);
+var quotelessJson = (obj) => {
+  const json = JSON.stringify(obj, null, 2);
   return json.replace(/"([^"]+)":/g, "$1:");
 };
 var ZodError = class _ZodError extends Error {
@@ -7833,18 +7837,18 @@ var ParseStatus = class _ParseStatus {
     if (this.value !== "aborted")
       this.value = "aborted";
   }
-  static mergeArray(status2, results) {
+  static mergeArray(status, results) {
     const arrayValue = [];
     for (const s of results) {
       if (s.status === "aborted")
         return INVALID;
       if (s.status === "dirty")
-        status2.dirty();
+        status.dirty();
       arrayValue.push(s.value);
     }
-    return { status: status2.value, value: arrayValue };
+    return { status: status.value, value: arrayValue };
   }
-  static async mergeObjectAsync(status2, pairs) {
+  static async mergeObjectAsync(status, pairs) {
     const syncPairs = [];
     for (const pair of pairs) {
       const key = await pair.key;
@@ -7854,9 +7858,9 @@ var ParseStatus = class _ParseStatus {
         value
       });
     }
-    return _ParseStatus.mergeObjectSync(status2, syncPairs);
+    return _ParseStatus.mergeObjectSync(status, syncPairs);
   }
-  static mergeObjectSync(status2, pairs) {
+  static mergeObjectSync(status, pairs) {
     const finalObject = {};
     for (const pair of pairs) {
       const { key, value } = pair;
@@ -7865,14 +7869,14 @@ var ParseStatus = class _ParseStatus {
       if (value.status === "aborted")
         return INVALID;
       if (key.status === "dirty")
-        status2.dirty();
+        status.dirty();
       if (value.status === "dirty")
-        status2.dirty();
+        status.dirty();
       if (key.value !== "__proto__" && (typeof value.value !== "undefined" || pair.alwaysSet)) {
         finalObject[key.value] = value.value;
       }
     }
-    return { status: status2.value, value: finalObject };
+    return { status: status.value, value: finalObject };
   }
 };
 var INVALID = Object.freeze({
@@ -8332,7 +8336,7 @@ var ZodString = class _ZodString2 extends ZodType {
       });
       return INVALID;
     }
-    const status2 = new ParseStatus();
+    const status = new ParseStatus();
     let ctx = void 0;
     for (const check2 of this._def.checks) {
       if (check2.kind === "min") {
@@ -8346,7 +8350,7 @@ var ZodString = class _ZodString2 extends ZodType {
             exact: false,
             message: check2.message
           });
-          status2.dirty();
+          status.dirty();
         }
       } else if (check2.kind === "max") {
         if (input.data.length > check2.value) {
@@ -8359,7 +8363,7 @@ var ZodString = class _ZodString2 extends ZodType {
             exact: false,
             message: check2.message
           });
-          status2.dirty();
+          status.dirty();
         }
       } else if (check2.kind === "length") {
         const tooBig = input.data.length > check2.value;
@@ -8385,7 +8389,7 @@ var ZodString = class _ZodString2 extends ZodType {
               message: check2.message
             });
           }
-          status2.dirty();
+          status.dirty();
         }
       } else if (check2.kind === "email") {
         if (!emailRegex.test(input.data)) {
@@ -8395,7 +8399,7 @@ var ZodString = class _ZodString2 extends ZodType {
             code: ZodIssueCode.invalid_string,
             message: check2.message
           });
-          status2.dirty();
+          status.dirty();
         }
       } else if (check2.kind === "emoji") {
         if (!emojiRegex) {
@@ -8408,7 +8412,7 @@ var ZodString = class _ZodString2 extends ZodType {
             code: ZodIssueCode.invalid_string,
             message: check2.message
           });
-          status2.dirty();
+          status.dirty();
         }
       } else if (check2.kind === "uuid") {
         if (!uuidRegex.test(input.data)) {
@@ -8418,7 +8422,7 @@ var ZodString = class _ZodString2 extends ZodType {
             code: ZodIssueCode.invalid_string,
             message: check2.message
           });
-          status2.dirty();
+          status.dirty();
         }
       } else if (check2.kind === "nanoid") {
         if (!nanoidRegex.test(input.data)) {
@@ -8428,7 +8432,7 @@ var ZodString = class _ZodString2 extends ZodType {
             code: ZodIssueCode.invalid_string,
             message: check2.message
           });
-          status2.dirty();
+          status.dirty();
         }
       } else if (check2.kind === "cuid") {
         if (!cuidRegex.test(input.data)) {
@@ -8438,7 +8442,7 @@ var ZodString = class _ZodString2 extends ZodType {
             code: ZodIssueCode.invalid_string,
             message: check2.message
           });
-          status2.dirty();
+          status.dirty();
         }
       } else if (check2.kind === "cuid2") {
         if (!cuid2Regex.test(input.data)) {
@@ -8448,7 +8452,7 @@ var ZodString = class _ZodString2 extends ZodType {
             code: ZodIssueCode.invalid_string,
             message: check2.message
           });
-          status2.dirty();
+          status.dirty();
         }
       } else if (check2.kind === "ulid") {
         if (!ulidRegex.test(input.data)) {
@@ -8458,7 +8462,7 @@ var ZodString = class _ZodString2 extends ZodType {
             code: ZodIssueCode.invalid_string,
             message: check2.message
           });
-          status2.dirty();
+          status.dirty();
         }
       } else if (check2.kind === "url") {
         try {
@@ -8470,7 +8474,7 @@ var ZodString = class _ZodString2 extends ZodType {
             code: ZodIssueCode.invalid_string,
             message: check2.message
           });
-          status2.dirty();
+          status.dirty();
         }
       } else if (check2.kind === "regex") {
         check2.regex.lastIndex = 0;
@@ -8482,7 +8486,7 @@ var ZodString = class _ZodString2 extends ZodType {
             code: ZodIssueCode.invalid_string,
             message: check2.message
           });
-          status2.dirty();
+          status.dirty();
         }
       } else if (check2.kind === "trim") {
         input.data = input.data.trim();
@@ -8494,7 +8498,7 @@ var ZodString = class _ZodString2 extends ZodType {
             validation: { includes: check2.value, position: check2.position },
             message: check2.message
           });
-          status2.dirty();
+          status.dirty();
         }
       } else if (check2.kind === "toLowerCase") {
         input.data = input.data.toLowerCase();
@@ -8508,7 +8512,7 @@ var ZodString = class _ZodString2 extends ZodType {
             validation: { startsWith: check2.value },
             message: check2.message
           });
-          status2.dirty();
+          status.dirty();
         }
       } else if (check2.kind === "endsWith") {
         if (!input.data.endsWith(check2.value)) {
@@ -8518,7 +8522,7 @@ var ZodString = class _ZodString2 extends ZodType {
             validation: { endsWith: check2.value },
             message: check2.message
           });
-          status2.dirty();
+          status.dirty();
         }
       } else if (check2.kind === "datetime") {
         const regex = datetimeRegex(check2);
@@ -8529,7 +8533,7 @@ var ZodString = class _ZodString2 extends ZodType {
             validation: "datetime",
             message: check2.message
           });
-          status2.dirty();
+          status.dirty();
         }
       } else if (check2.kind === "date") {
         const regex = dateRegex;
@@ -8540,7 +8544,7 @@ var ZodString = class _ZodString2 extends ZodType {
             validation: "date",
             message: check2.message
           });
-          status2.dirty();
+          status.dirty();
         }
       } else if (check2.kind === "time") {
         const regex = timeRegex(check2);
@@ -8551,7 +8555,7 @@ var ZodString = class _ZodString2 extends ZodType {
             validation: "time",
             message: check2.message
           });
-          status2.dirty();
+          status.dirty();
         }
       } else if (check2.kind === "duration") {
         if (!durationRegex.test(input.data)) {
@@ -8561,7 +8565,7 @@ var ZodString = class _ZodString2 extends ZodType {
             code: ZodIssueCode.invalid_string,
             message: check2.message
           });
-          status2.dirty();
+          status.dirty();
         }
       } else if (check2.kind === "ip") {
         if (!isValidIP(input.data, check2.version)) {
@@ -8571,7 +8575,7 @@ var ZodString = class _ZodString2 extends ZodType {
             code: ZodIssueCode.invalid_string,
             message: check2.message
           });
-          status2.dirty();
+          status.dirty();
         }
       } else if (check2.kind === "jwt") {
         if (!isValidJWT(input.data, check2.alg)) {
@@ -8581,7 +8585,7 @@ var ZodString = class _ZodString2 extends ZodType {
             code: ZodIssueCode.invalid_string,
             message: check2.message
           });
-          status2.dirty();
+          status.dirty();
         }
       } else if (check2.kind === "cidr") {
         if (!isValidCidr(input.data, check2.version)) {
@@ -8591,7 +8595,7 @@ var ZodString = class _ZodString2 extends ZodType {
             code: ZodIssueCode.invalid_string,
             message: check2.message
           });
-          status2.dirty();
+          status.dirty();
         }
       } else if (check2.kind === "base64") {
         if (!base64Regex.test(input.data)) {
@@ -8601,7 +8605,7 @@ var ZodString = class _ZodString2 extends ZodType {
             code: ZodIssueCode.invalid_string,
             message: check2.message
           });
-          status2.dirty();
+          status.dirty();
         }
       } else if (check2.kind === "base64url") {
         if (!base64urlRegex.test(input.data)) {
@@ -8611,13 +8615,13 @@ var ZodString = class _ZodString2 extends ZodType {
             code: ZodIssueCode.invalid_string,
             message: check2.message
           });
-          status2.dirty();
+          status.dirty();
         }
       } else {
         util.assertNever(check2);
       }
     }
-    return { status: status2.value, value: input.data };
+    return { status: status.value, value: input.data };
   }
   _regex(regex, validation, message) {
     return this.refinement((data) => regex.test(data), {
@@ -8893,7 +8897,7 @@ var ZodNumber = class _ZodNumber extends ZodType {
       return INVALID;
     }
     let ctx = void 0;
-    const status2 = new ParseStatus();
+    const status = new ParseStatus();
     for (const check2 of this._def.checks) {
       if (check2.kind === "int") {
         if (!util.isInteger(input.data)) {
@@ -8904,7 +8908,7 @@ var ZodNumber = class _ZodNumber extends ZodType {
             received: "float",
             message: check2.message
           });
-          status2.dirty();
+          status.dirty();
         }
       } else if (check2.kind === "min") {
         const tooSmall = check2.inclusive ? input.data < check2.value : input.data <= check2.value;
@@ -8918,7 +8922,7 @@ var ZodNumber = class _ZodNumber extends ZodType {
             exact: false,
             message: check2.message
           });
-          status2.dirty();
+          status.dirty();
         }
       } else if (check2.kind === "max") {
         const tooBig = check2.inclusive ? input.data > check2.value : input.data >= check2.value;
@@ -8932,7 +8936,7 @@ var ZodNumber = class _ZodNumber extends ZodType {
             exact: false,
             message: check2.message
           });
-          status2.dirty();
+          status.dirty();
         }
       } else if (check2.kind === "multipleOf") {
         if (floatSafeRemainder(input.data, check2.value) !== 0) {
@@ -8942,7 +8946,7 @@ var ZodNumber = class _ZodNumber extends ZodType {
             multipleOf: check2.value,
             message: check2.message
           });
-          status2.dirty();
+          status.dirty();
         }
       } else if (check2.kind === "finite") {
         if (!Number.isFinite(input.data)) {
@@ -8951,13 +8955,13 @@ var ZodNumber = class _ZodNumber extends ZodType {
             code: ZodIssueCode.not_finite,
             message: check2.message
           });
-          status2.dirty();
+          status.dirty();
         }
       } else {
         util.assertNever(check2);
       }
     }
-    return { status: status2.value, value: input.data };
+    return { status: status.value, value: input.data };
   }
   gte(value, message) {
     return this.setLimit("min", value, true, errorUtil.toString(message));
@@ -9122,7 +9126,7 @@ var ZodBigInt = class _ZodBigInt extends ZodType {
       return this._getInvalidInput(input);
     }
     let ctx = void 0;
-    const status2 = new ParseStatus();
+    const status = new ParseStatus();
     for (const check2 of this._def.checks) {
       if (check2.kind === "min") {
         const tooSmall = check2.inclusive ? input.data < check2.value : input.data <= check2.value;
@@ -9135,7 +9139,7 @@ var ZodBigInt = class _ZodBigInt extends ZodType {
             inclusive: check2.inclusive,
             message: check2.message
           });
-          status2.dirty();
+          status.dirty();
         }
       } else if (check2.kind === "max") {
         const tooBig = check2.inclusive ? input.data > check2.value : input.data >= check2.value;
@@ -9148,7 +9152,7 @@ var ZodBigInt = class _ZodBigInt extends ZodType {
             inclusive: check2.inclusive,
             message: check2.message
           });
-          status2.dirty();
+          status.dirty();
         }
       } else if (check2.kind === "multipleOf") {
         if (input.data % check2.value !== BigInt(0)) {
@@ -9158,13 +9162,13 @@ var ZodBigInt = class _ZodBigInt extends ZodType {
             multipleOf: check2.value,
             message: check2.message
           });
-          status2.dirty();
+          status.dirty();
         }
       } else {
         util.assertNever(check2);
       }
     }
-    return { status: status2.value, value: input.data };
+    return { status: status.value, value: input.data };
   }
   _getInvalidInput(input) {
     const ctx = this._getOrReturnCtx(input);
@@ -9322,7 +9326,7 @@ var ZodDate = class _ZodDate extends ZodType {
       });
       return INVALID;
     }
-    const status2 = new ParseStatus();
+    const status = new ParseStatus();
     let ctx = void 0;
     for (const check2 of this._def.checks) {
       if (check2.kind === "min") {
@@ -9336,7 +9340,7 @@ var ZodDate = class _ZodDate extends ZodType {
             minimum: check2.value,
             type: "date"
           });
-          status2.dirty();
+          status.dirty();
         }
       } else if (check2.kind === "max") {
         if (input.data.getTime() > check2.value) {
@@ -9349,14 +9353,14 @@ var ZodDate = class _ZodDate extends ZodType {
             maximum: check2.value,
             type: "date"
           });
-          status2.dirty();
+          status.dirty();
         }
       } else {
         util.assertNever(check2);
       }
     }
     return {
-      status: status2.value,
+      status: status.value,
       value: new Date(input.data.getTime())
     };
   }
@@ -9542,7 +9546,7 @@ ZodVoid.create = (params) => {
 };
 var ZodArray = class _ZodArray extends ZodType {
   _parse(input) {
-    const { ctx, status: status2 } = this._processInputParams(input);
+    const { ctx, status } = this._processInputParams(input);
     const def = this._def;
     if (ctx.parsedType !== ZodParsedType.array) {
       addIssueToContext(ctx, {
@@ -9565,7 +9569,7 @@ var ZodArray = class _ZodArray extends ZodType {
           exact: true,
           message: def.exactLength.message
         });
-        status2.dirty();
+        status.dirty();
       }
     }
     if (def.minLength !== null) {
@@ -9578,7 +9582,7 @@ var ZodArray = class _ZodArray extends ZodType {
           exact: false,
           message: def.minLength.message
         });
-        status2.dirty();
+        status.dirty();
       }
     }
     if (def.maxLength !== null) {
@@ -9591,20 +9595,20 @@ var ZodArray = class _ZodArray extends ZodType {
           exact: false,
           message: def.maxLength.message
         });
-        status2.dirty();
+        status.dirty();
       }
     }
     if (ctx.common.async) {
       return Promise.all([...ctx.data].map((item, i) => {
         return def.type._parseAsync(new ParseInputLazyPath(ctx, item, ctx.path, i));
       })).then((result2) => {
-        return ParseStatus.mergeArray(status2, result2);
+        return ParseStatus.mergeArray(status, result2);
       });
     }
     const result = [...ctx.data].map((item, i) => {
       return def.type._parseSync(new ParseInputLazyPath(ctx, item, ctx.path, i));
     });
-    return ParseStatus.mergeArray(status2, result);
+    return ParseStatus.mergeArray(status, result);
   }
   get element() {
     return this._def.type;
@@ -9693,7 +9697,7 @@ var ZodObject = class _ZodObject extends ZodType {
       });
       return INVALID;
     }
-    const { status: status2, ctx } = this._processInputParams(input);
+    const { status, ctx } = this._processInputParams(input);
     const { shape, keys: shapeKeys } = this._getCached();
     const extraKeys = [];
     if (!(this._def.catchall instanceof ZodNever && this._def.unknownKeys === "strip")) {
@@ -9728,7 +9732,7 @@ var ZodObject = class _ZodObject extends ZodType {
             code: ZodIssueCode.unrecognized_keys,
             keys: extraKeys
           });
-          status2.dirty();
+          status.dirty();
         }
       } else if (unknownKeys === "strip") {
       } else {
@@ -9762,10 +9766,10 @@ var ZodObject = class _ZodObject extends ZodType {
         }
         return syncPairs;
       }).then((syncPairs) => {
-        return ParseStatus.mergeObjectSync(status2, syncPairs);
+        return ParseStatus.mergeObjectSync(status, syncPairs);
       });
     } else {
-      return ParseStatus.mergeObjectSync(status2, pairs);
+      return ParseStatus.mergeObjectSync(status, pairs);
     }
   }
   get shape() {
@@ -10243,7 +10247,7 @@ function mergeValues(a, b) {
 }
 var ZodIntersection = class extends ZodType {
   _parse(input) {
-    const { status: status2, ctx } = this._processInputParams(input);
+    const { status, ctx } = this._processInputParams(input);
     const handleParsed = (parsedLeft, parsedRight) => {
       if (isAborted(parsedLeft) || isAborted(parsedRight)) {
         return INVALID;
@@ -10256,9 +10260,9 @@ var ZodIntersection = class extends ZodType {
         return INVALID;
       }
       if (isDirty(parsedLeft) || isDirty(parsedRight)) {
-        status2.dirty();
+        status.dirty();
       }
-      return { status: status2.value, value: merged.data };
+      return { status: status.value, value: merged.data };
     };
     if (ctx.common.async) {
       return Promise.all([
@@ -10296,7 +10300,7 @@ ZodIntersection.create = (left, right, params) => {
 };
 var ZodTuple = class _ZodTuple extends ZodType {
   _parse(input) {
-    const { status: status2, ctx } = this._processInputParams(input);
+    const { status, ctx } = this._processInputParams(input);
     if (ctx.parsedType !== ZodParsedType.array) {
       addIssueToContext(ctx, {
         code: ZodIssueCode.invalid_type,
@@ -10324,7 +10328,7 @@ var ZodTuple = class _ZodTuple extends ZodType {
         exact: false,
         type: "array"
       });
-      status2.dirty();
+      status.dirty();
     }
     const items = [...ctx.data].map((item, itemIndex) => {
       const schema = this._def.items[itemIndex] || this._def.rest;
@@ -10334,10 +10338,10 @@ var ZodTuple = class _ZodTuple extends ZodType {
     }).filter((x) => !!x);
     if (ctx.common.async) {
       return Promise.all(items).then((results) => {
-        return ParseStatus.mergeArray(status2, results);
+        return ParseStatus.mergeArray(status, results);
       });
     } else {
-      return ParseStatus.mergeArray(status2, items);
+      return ParseStatus.mergeArray(status, items);
     }
   }
   get items() {
@@ -10369,7 +10373,7 @@ var ZodRecord = class _ZodRecord extends ZodType {
     return this._def.valueType;
   }
   _parse(input) {
-    const { status: status2, ctx } = this._processInputParams(input);
+    const { status, ctx } = this._processInputParams(input);
     if (ctx.parsedType !== ZodParsedType.object) {
       addIssueToContext(ctx, {
         code: ZodIssueCode.invalid_type,
@@ -10389,9 +10393,9 @@ var ZodRecord = class _ZodRecord extends ZodType {
       });
     }
     if (ctx.common.async) {
-      return ParseStatus.mergeObjectAsync(status2, pairs);
+      return ParseStatus.mergeObjectAsync(status, pairs);
     } else {
-      return ParseStatus.mergeObjectSync(status2, pairs);
+      return ParseStatus.mergeObjectSync(status, pairs);
     }
   }
   get element() {
@@ -10422,7 +10426,7 @@ var ZodMap = class extends ZodType {
     return this._def.valueType;
   }
   _parse(input) {
-    const { status: status2, ctx } = this._processInputParams(input);
+    const { status, ctx } = this._processInputParams(input);
     if (ctx.parsedType !== ZodParsedType.map) {
       addIssueToContext(ctx, {
         code: ZodIssueCode.invalid_type,
@@ -10449,11 +10453,11 @@ var ZodMap = class extends ZodType {
             return INVALID;
           }
           if (key.status === "dirty" || value.status === "dirty") {
-            status2.dirty();
+            status.dirty();
           }
           finalMap.set(key.value, value.value);
         }
-        return { status: status2.value, value: finalMap };
+        return { status: status.value, value: finalMap };
       });
     } else {
       const finalMap = /* @__PURE__ */ new Map();
@@ -10464,11 +10468,11 @@ var ZodMap = class extends ZodType {
           return INVALID;
         }
         if (key.status === "dirty" || value.status === "dirty") {
-          status2.dirty();
+          status.dirty();
         }
         finalMap.set(key.value, value.value);
       }
-      return { status: status2.value, value: finalMap };
+      return { status: status.value, value: finalMap };
     }
   }
 };
@@ -10482,7 +10486,7 @@ ZodMap.create = (keyType, valueType, params) => {
 };
 var ZodSet = class _ZodSet extends ZodType {
   _parse(input) {
-    const { status: status2, ctx } = this._processInputParams(input);
+    const { status, ctx } = this._processInputParams(input);
     if (ctx.parsedType !== ZodParsedType.set) {
       addIssueToContext(ctx, {
         code: ZodIssueCode.invalid_type,
@@ -10502,7 +10506,7 @@ var ZodSet = class _ZodSet extends ZodType {
           exact: false,
           message: def.minSize.message
         });
-        status2.dirty();
+        status.dirty();
       }
     }
     if (def.maxSize !== null) {
@@ -10515,7 +10519,7 @@ var ZodSet = class _ZodSet extends ZodType {
           exact: false,
           message: def.maxSize.message
         });
-        status2.dirty();
+        status.dirty();
       }
     }
     const valueType = this._def.valueType;
@@ -10525,10 +10529,10 @@ var ZodSet = class _ZodSet extends ZodType {
         if (element.status === "aborted")
           return INVALID;
         if (element.status === "dirty")
-          status2.dirty();
+          status.dirty();
         parsedSet.add(element.value);
       }
-      return { status: status2.value, value: parsedSet };
+      return { status: status.value, value: parsedSet };
     }
     const elements = [...ctx.data.values()].map((item, i) => valueType._parse(new ParseInputLazyPath(ctx, item, ctx.path, i)));
     if (ctx.common.async) {
@@ -10859,15 +10863,15 @@ var ZodEffects = class extends ZodType {
     return this._def.schema._def.typeName === ZodFirstPartyTypeKind.ZodEffects ? this._def.schema.sourceType() : this._def.schema;
   }
   _parse(input) {
-    const { status: status2, ctx } = this._processInputParams(input);
+    const { status, ctx } = this._processInputParams(input);
     const effect = this._def.effect || null;
     const checkCtx = {
       addIssue: (arg) => {
         addIssueToContext(ctx, arg);
         if (arg.fatal) {
-          status2.abort();
+          status.abort();
         } else {
-          status2.dirty();
+          status.dirty();
         }
       },
       get path() {
@@ -10879,7 +10883,7 @@ var ZodEffects = class extends ZodType {
       const processed = effect.transform(ctx.data, checkCtx);
       if (ctx.common.async) {
         return Promise.resolve(processed).then(async (processed2) => {
-          if (status2.value === "aborted")
+          if (status.value === "aborted")
             return INVALID;
           const result = await this._def.schema._parseAsync({
             data: processed2,
@@ -10890,12 +10894,12 @@ var ZodEffects = class extends ZodType {
             return INVALID;
           if (result.status === "dirty")
             return DIRTY(result.value);
-          if (status2.value === "dirty")
+          if (status.value === "dirty")
             return DIRTY(result.value);
           return result;
         });
       } else {
-        if (status2.value === "aborted")
+        if (status.value === "aborted")
           return INVALID;
         const result = this._def.schema._parseSync({
           data: processed,
@@ -10906,7 +10910,7 @@ var ZodEffects = class extends ZodType {
           return INVALID;
         if (result.status === "dirty")
           return DIRTY(result.value);
-        if (status2.value === "dirty")
+        if (status.value === "dirty")
           return DIRTY(result.value);
         return result;
       }
@@ -10931,17 +10935,17 @@ var ZodEffects = class extends ZodType {
         if (inner.status === "aborted")
           return INVALID;
         if (inner.status === "dirty")
-          status2.dirty();
+          status.dirty();
         executeRefinement(inner.value);
-        return { status: status2.value, value: inner.value };
+        return { status: status.value, value: inner.value };
       } else {
         return this._def.schema._parseAsync({ data: ctx.data, path: ctx.path, parent: ctx }).then((inner) => {
           if (inner.status === "aborted")
             return INVALID;
           if (inner.status === "dirty")
-            status2.dirty();
+            status.dirty();
           return executeRefinement(inner.value).then(() => {
-            return { status: status2.value, value: inner.value };
+            return { status: status.value, value: inner.value };
           });
         });
       }
@@ -10959,13 +10963,13 @@ var ZodEffects = class extends ZodType {
         if (result instanceof Promise) {
           throw new Error(`Asynchronous transform encountered during synchronous parse operation. Use .parseAsync instead.`);
         }
-        return { status: status2.value, value: result };
+        return { status: status.value, value: result };
       } else {
         return this._def.schema._parseAsync({ data: ctx.data, path: ctx.path, parent: ctx }).then((base) => {
           if (!isValid(base))
             return INVALID;
           return Promise.resolve(effect.transform(base.value, checkCtx)).then((result) => ({
-            status: status2.value,
+            status: status.value,
             value: result
           }));
         });
@@ -11144,7 +11148,7 @@ var ZodBranded = class extends ZodType {
 };
 var ZodPipeline = class _ZodPipeline extends ZodType {
   _parse(input) {
-    const { status: status2, ctx } = this._processInputParams(input);
+    const { status, ctx } = this._processInputParams(input);
     if (ctx.common.async) {
       const handleAsync = async () => {
         const inResult = await this._def.in._parseAsync({
@@ -11155,7 +11159,7 @@ var ZodPipeline = class _ZodPipeline extends ZodType {
         if (inResult.status === "aborted")
           return INVALID;
         if (inResult.status === "dirty") {
-          status2.dirty();
+          status.dirty();
           return DIRTY(inResult.value);
         } else {
           return this._def.out._parseAsync({
@@ -11175,7 +11179,7 @@ var ZodPipeline = class _ZodPipeline extends ZodType {
       if (inResult.status === "aborted")
         return INVALID;
       if (inResult.status === "dirty") {
-        status2.dirty();
+        status.dirty();
         return {
           status: "dirty",
           value: inResult.value
@@ -11340,15 +11344,9 @@ var coerce = {
 };
 var NEVER = INVALID;
 
-// src/shared/pull-url.ts
-function pullWebUrl(origin, pull, webOrigin) {
-  const url2 = new URL(webOrigin ?? origin);
-  if (!webOrigin) url2.hostname = url2.hostname.replace(/^api\./, "");
-  url2.pathname = `/dashboard/repositories/${encodeURIComponent(pull.owner)}/${encodeURIComponent(pull.repo)}/pulls/${pull.number}`;
-  url2.search = "";
-  url2.hash = "";
-  return url2.href;
-}
+// src/shared/manifest.ts
+var DEFAULT_ORIGIN = "https://api.hub.controlvector.io";
+var STATUS_BAR_ID = "cvhub-status";
 
 // src/worker/connection.ts
 import { randomUUID } from "node:crypto";
@@ -11358,10 +11356,10 @@ function isLoopback(hostname2) {
   return ["localhost", "127.0.0.1", "[::1]"].includes(hostname2);
 }
 var CvHubError = class extends Error {
-  constructor(code, message, status2) {
+  constructor(code, message, status) {
     super(`[${code}] ${message}`);
     this.code = code;
-    this.status = status2;
+    this.status = status;
   }
 };
 function normalizeOrigin(value) {
@@ -11448,29 +11446,29 @@ var RestClient = class {
       ) : init.method && init.method !== "GET" ? new CvHubError("outcome_unknown", "The connection dropped before CV Hub replied. Reload before trying again.") : new CvHubError("offline", "CV Hub is unreachable or timed out");
     }
     if (!response.ok) {
-      const status2 = response.status;
-      const reason = status2 === 400 || status2 === 403 ? await serverReason(response) : null;
+      const status = response.status;
+      const reason = status === 400 || status === 403 ? await serverReason(response) : null;
       if (!reason) await response.body?.cancel();
-      if (status2 === 400) throw new CvHubError("rejected", reason ?? "CV Hub refused the request", status2);
-      if (status2 === 403 && reason) throw new CvHubError("forbidden", reason, status2);
-      if (status2 === 401)
-        throw new CvHubError("unauthorized", "CV Hub rejected the sign-in. Sign in again", status2);
-      if (status2 === 403)
-        throw new CvHubError("forbidden", "This account cannot perform that action", status2);
-      if (status2 === 404) throw new CvHubError("not_found", "Not found on CV Hub", status2);
-      if (status2 === 409)
+      if (status === 400) throw new CvHubError("rejected", reason ?? "CV Hub refused the request", status);
+      if (status === 403 && reason) throw new CvHubError("forbidden", reason, status);
+      if (status === 401)
+        throw new CvHubError("unauthorized", "CV Hub rejected the sign-in. Sign in again", status);
+      if (status === 403)
+        throw new CvHubError("forbidden", "This account cannot perform that action", status);
+      if (status === 404) throw new CvHubError("not_found", "Not found on CV Hub", status);
+      if (status === 409)
         throw new CvHubError(
           "stale_revision",
           "The PR changed. Open and review its latest changes before submitting",
-          status2
+          status
         );
-      if (status2 === 429)
+      if (status === 429)
         throw new CvHubError(
           "rate_limited",
           "CV Hub rate limit reached. Wait before trying again",
-          status2
+          status
         );
-      throw new CvHubError("server_error", `CV Hub request failed (${status2})`, status2);
+      throw new CvHubError("server_error", `CV Hub request failed (${status})`, status);
     }
     return readBoundedJson(response, maxBytes);
   }
@@ -11524,8 +11522,7 @@ var oauthErrorSchema = external_exports.object({
   error_description: external_exports.string().optional(),
   interval: external_exports.number().optional()
 });
-var UNVERIFIED = "Orca can\u2019t confirm this address belongs to your CV Hub server, so it won\u2019t open it. Enter the code there yourself only if you trust the address.";
-var UNAVAILABLE = "This Orca build can\u2019t open the browser for plugins (it needs the browser:authorize host, lamtuanvu/orca 75b02825). Open the address below yourself.";
+var UNVERIFIED = "Orca couldn\u2019t confirm this address belongs to your CV Hub server, so it won\u2019t offer to open it. Copy the address and open it yourself only if you trust it.";
 function safeBrowserUrl(value) {
   const url2 = new URL(value);
   const okScheme = url2.protocol === "https:" || url2.protocol === "http:" && isLoopback(url2.hostname);
@@ -11534,10 +11531,11 @@ function safeBrowserUrl(value) {
   return url2.href;
 }
 var Connection = class {
-  constructor(host, fetcher = fetch, clock = realClock) {
-    this.host = host;
+  constructor(port, fetcher = fetch, clock = realClock, onChange) {
+    this.port = port;
     this.fetcher = fetcher;
     this.clock = clock;
+    this.onChange = onChange;
   }
   attempt = null;
   generation = 0;
@@ -11545,14 +11543,14 @@ var Connection = class {
   changing = false;
   // ---------- storage ----------
   async stored() {
-    return external_exports.object({ value: external_exports.unknown() }).parse(await this.host.call("storage.get", { key: "connection" })).value;
+    return await this.port.storage.get("connection");
   }
   async profile() {
     const parsed = profileSchema.safeParse(await this.stored());
     return parsed.success ? parsed.data : null;
   }
   async tokens() {
-    const { value } = external_exports.object({ value: external_exports.string().nullable() }).parse(await this.host.call("secrets.get", { key: "oauth" }));
+    const value = await this.port.secrets.get("oauth");
     if (!value) return null;
     try {
       return tokensSchema.parse(JSON.parse(value));
@@ -11561,7 +11559,7 @@ var Connection = class {
     }
   }
   async saveTokens(tokens) {
-    await this.host.call("secrets.set", { key: "oauth", value: JSON.stringify(tokens) });
+    await this.port.secrets.set("oauth", JSON.stringify(tokens));
   }
   // ---------- public status (safe for the panel) ----------
   attemptView() {
@@ -11572,12 +11570,11 @@ var Connection = class {
       origin: a.origin,
       phase: a.phase,
       userCode: a.userCode,
-      // The address to copy for manual navigation: the pre-filled link when it was verified.
+      // The address to open: the pre-filled link when it was verified, else the raw one.
       verificationUri: a.verifiedUrl ?? a.verificationUri,
+      verified: a.verifiedUrl !== null,
       expiresAt: a.expiresAt,
-      message: a.message ?? null,
-      browser: a.browser,
-      browserMessage: a.browserMessage ?? null
+      message: a.message ?? null
     };
   }
   async status() {
@@ -11617,9 +11614,9 @@ var Connection = class {
     return { offline: false, ok: response.ok, status: response.status, data };
   }
   // ---------- device authorization ----------
-  async start(args) {
+  async start(originInput) {
     if (this.changing) throw new CvHubError("busy", "A connection change is already in progress");
-    const origin = normalizeOrigin(external_exports.object({ origin: external_exports.string().max(2048) }).parse(args).origin);
+    const origin = normalizeOrigin(originInput);
     this.cancelAttempt();
     const generation = ++this.generation;
     const result = await this.form(origin, "/oauth/device/authorize", {
@@ -11658,10 +11655,10 @@ var Connection = class {
       intervalS: Math.max(1, device.interval ?? 5),
       deviceCode: device.device_code,
       verifiedUrl,
-      browser: verifiedUrl ? "idle" : "unverified",
-      browserMessage: verifiedUrl ? void 0 : UNVERIFIED
+      message: verifiedUrl ? void 0 : UNVERIFIED
     };
     this.schedulePoll(this.attempt);
+    this.changed();
     return this.attemptView();
   }
   /** The device response names a browser destination; accept it only when it is CV Hub's
@@ -11684,68 +11681,65 @@ var Connection = class {
     }
     return null;
   }
-  current(attempt2) {
-    return this.attempt === attempt2 && attempt2.generation === this.generation;
+  current(attempt) {
+    return this.attempt === attempt && attempt.generation === this.generation;
   }
-  schedulePoll(attempt2, delayS = attempt2.intervalS) {
-    attempt2.timer = this.clock.setTimeout(() => void this.poll(attempt2), delayS * 1e3);
+  schedulePoll(attempt, delayS = attempt.intervalS) {
+    attempt.timer = this.clock.setTimeout(() => void this.poll(attempt), delayS * 1e3);
   }
-  finish(attempt2, phase, message) {
-    attempt2.phase = phase;
-    attempt2.message = message;
-    attempt2.deviceCode = "";
-    this.releaseHost(attempt2);
+  finish(attempt, phase, message) {
+    attempt.phase = phase;
+    attempt.message = message;
+    attempt.deviceCode = "";
+    this.changed();
   }
-  /** Cancel Orca's browser handle: on completion, denial, failure, cancellation and after use. */
-  releaseHost(attempt2) {
-    const id = attempt2.hostAttempt;
-    attempt2.hostAttempt = void 0;
-    if (id) void this.host.call("browser.cancelAuthorization", { attemptId: id }).catch(() => void 0);
+  changed() {
+    this.onChange?.();
   }
-  async poll(attempt2, backoffS = 0) {
-    if (!this.current(attempt2) || attempt2.phase !== "pending") return;
-    if (this.clock.now() >= attempt2.expiresAt) return this.finish(attempt2, "expired");
-    const result = await this.form(attempt2.origin, "/oauth/token", {
+  async poll(attempt, backoffS = 0) {
+    if (!this.current(attempt) || attempt.phase !== "pending") return;
+    if (this.clock.now() >= attempt.expiresAt) return this.finish(attempt, "expired");
+    const result = await this.form(attempt.origin, "/oauth/token", {
       grant_type: DEVICE_GRANT,
-      device_code: attempt2.deviceCode,
+      device_code: attempt.deviceCode,
       client_id: CLIENT_ID
     });
-    if (!this.current(attempt2) || attempt2.phase !== "pending") {
-      if (!result.offline && result.ok) await this.revokeIssued(attempt2.origin, result.data);
+    if (!this.current(attempt) || attempt.phase !== "pending") {
+      if (!result.offline && result.ok) await this.revokeIssued(attempt.origin, result.data);
       return;
     }
     if (result.offline) {
-      const next = Math.min(MAX_BACKOFF_S, Math.max(attempt2.intervalS, (backoffS || attempt2.intervalS) * 2));
-      attempt2.timer = this.clock.setTimeout(() => void this.poll(attempt2, next), next * 1e3);
+      const next = Math.min(MAX_BACKOFF_S, Math.max(attempt.intervalS, (backoffS || attempt.intervalS) * 2));
+      attempt.timer = this.clock.setTimeout(() => void this.poll(attempt, next), next * 1e3);
       return;
     }
     if (!result.ok) {
       const error2 = oauthErrorSchema.safeParse(result.data);
       const code = error2.success ? error2.data.error : "server_error";
-      if (code === "authorization_pending") return this.schedulePoll(attempt2);
+      if (code === "authorization_pending") return this.schedulePoll(attempt);
       if (code === "slow_down") {
-        attempt2.intervalS = Math.max(attempt2.intervalS + 5, error2.success ? error2.data.interval ?? 0 : 0);
-        return this.schedulePoll(attempt2);
+        attempt.intervalS = Math.max(attempt.intervalS + 5, error2.success ? error2.data.interval ?? 0 : 0);
+        return this.schedulePoll(attempt);
       }
-      if (code === "access_denied") return this.finish(attempt2, "denied");
-      if (code === "expired_token") return this.finish(attempt2, "expired");
+      if (code === "access_denied") return this.finish(attempt, "denied");
+      if (code === "expired_token") return this.finish(attempt, "expired");
       if (code === "invalid_client" || code === "unauthorized_client")
-        return this.finish(attempt2, "invalid_client");
-      return this.finish(attempt2, "error", `CV Hub returned ${code}`);
+        return this.finish(attempt, "invalid_client");
+      return this.finish(attempt, "error", `CV Hub returned ${code}`);
     }
     const tokens = tokenResponseSchema.safeParse(result.data);
-    if (!tokens.success) return this.finish(attempt2, "error", "CV Hub returned an invalid token response");
+    if (!tokens.success) return this.finish(attempt, "error", "CV Hub returned an invalid token response");
     try {
-      await this.establish(attempt2, tokens.data);
+      await this.establish(attempt, tokens.data);
     } catch (error2) {
-      await this.revokeIssued(attempt2.origin, result.data);
-      if (this.current(attempt2))
-        this.finish(attempt2, "error", error2 instanceof Error ? error2.message : "Sign-in failed");
+      await this.revokeIssued(attempt.origin, result.data);
+      if (this.current(attempt))
+        this.finish(attempt, "error", error2 instanceof Error ? error2.message : "Sign-in failed");
     }
   }
   /** Verify identity and MCP discovery with the new token before declaring sign-in complete. */
-  async establish(attempt2, token) {
-    const client = new RestClient(attempt2.origin, token.access_token, this.fetcher);
+  async establish(attempt, token) {
+    const client = new RestClient(attempt.origin, token.access_token, this.fetcher);
     const [{ user }, discovery] = await Promise.all([
       client.json("/api/auth/me").then(
         (data) => external_exports.object({
@@ -11761,15 +11755,15 @@ var Connection = class {
       )
     ]);
     const mcpUrl = new URL(discovery.mcpUrl);
-    if (mcpUrl.origin !== attempt2.origin || mcpUrl.username || mcpUrl.password)
+    if (mcpUrl.origin !== attempt.origin || mcpUrl.username || mcpUrl.password)
       throw new CvHubError("mcp_origin", "MCP discovery returned a different API origin");
-    if (!this.current(attempt2)) throw new CvHubError("cancelled", "Sign-in was cancelled");
+    if (!this.current(attempt)) throw new CvHubError("cancelled", "Sign-in was cancelled");
     const scopes = token.scope ? token.scope.split(" ").filter(Boolean) : ["repo:read"];
     const profile = {
       kind: "oauth",
       connectionId: randomUUID(),
-      origin: attempt2.origin,
-      ...attempt2.verifiedUrl ? { webOrigin: new URL(safeBrowserUrl(attempt2.verifiedUrl)).origin } : {},
+      origin: attempt.origin,
+      ...attempt.verifiedUrl ? { webOrigin: new URL(safeBrowserUrl(attempt.verifiedUrl)).origin } : {},
       mcpUrl: mcpUrl.href,
       username: user.username,
       userId: user.id,
@@ -11784,16 +11778,16 @@ var Connection = class {
         expiresAt: this.clock.now() + (token.expires_in ?? 3600) * 1e3
       });
       try {
-        await this.host.call("storage.set", { key: "connection", value: profile });
+        await this.port.storage.set("connection", profile);
       } catch {
-        await this.host.call("secrets.delete", { key: "oauth" });
+        await this.port.secrets.delete("oauth");
         throw new CvHubError("storage", "Could not save the connection");
       }
-      await this.host.call("secrets.delete", { key: "pat" }).catch(() => void 0);
+      await this.port.secrets.delete("pat").catch(() => void 0);
     } finally {
       this.changing = false;
     }
-    this.finish(attempt2, "connected");
+    this.finish(attempt, "connected");
   }
   async revokeIssued(origin, data) {
     const t = tokenResponseSchema.safeParse(data);
@@ -11808,80 +11802,22 @@ var Connection = class {
     if (!this.attempt) return;
     this.clock.clearTimeout(this.attempt.timer);
     this.attempt.deviceCode = "";
-    this.releaseHost(this.attempt);
     this.attempt = null;
   }
-  cancel(args) {
-    const { attemptId } = external_exports.object({ attemptId: external_exports.string().optional() }).parse(args ?? {});
+  cancel(attemptId) {
     if (this.attempt && (!attemptId || this.attempt.attemptId === attemptId)) {
       this.cancelAttempt();
       this.generation++;
+      this.changed();
     }
     return this.status();
-  }
-  /** Starts Orca's browser hand-off without waiting for it: the host shows a native
-   *  confirmation that can take arbitrarily long, and worker commands time out after 30 s.
-   *  The outcome is reported through status(). The panel never sees Orca's handle. */
-  openVerification(args) {
-    const { attemptId } = external_exports.object({ attemptId: external_exports.string() }).parse(args);
-    const a = this.attempt;
-    if (!a || a.attemptId !== attemptId || a.phase !== "pending")
-      throw new CvHubError("no_attempt", "This sign-in request is no longer active");
-    const view = () => ({ requested: a.opening === true, browser: a.browser, browserMessage: a.browserMessage ?? null });
-    if (!a.verifiedUrl || a.opening) return view();
-    a.opening = true;
-    a.browser = "confirming";
-    a.browserMessage = void 0;
-    void this.handOff(a);
-    return view();
-  }
-  async handOff(a) {
-    try {
-      this.releaseHost(a);
-      const expiresIn = Math.min(900, Math.floor((a.expiresAt - this.clock.now()) / 1e3));
-      if (expiresIn < 1) return this.finish(a, "expired");
-      const created = external_exports.object({ attemptId: external_exports.string(), expiresAt: external_exports.number() }).parse(
-        await this.host.call("browser.createAuthorization", {
-          serverOrigin: a.origin,
-          verificationUrl: a.verifiedUrl,
-          expiresIn
-        })
-      );
-      if (!this.current(a) || a.phase !== "pending") {
-        void this.host.call("browser.cancelAuthorization", { attemptId: created.attemptId }).catch(() => void 0);
-        return;
-      }
-      a.hostAttempt = created.attemptId;
-      const result = external_exports.object({ opened: external_exports.boolean() }).parse(await this.host.call("browser.openAuthorization", { attemptId: created.attemptId }));
-      if (!this.current(a)) return;
-      a.browser = result.opened ? "opened" : "declined";
-      a.browserMessage = result.opened ? void 0 : "You declined opening the browser. Continue again, or open the address yourself.";
-      this.releaseHost(a);
-    } catch (error2) {
-      if (!this.current(a)) return;
-      const text = error2 instanceof Error ? error2.message : "";
-      if (/rate limited|already pending/i.test(text)) {
-        a.browser = "rate_limited";
-        a.browserMessage = "Orca allows one browser request every few seconds. Try again shortly.";
-      } else if (/Authorization unavailable|Plugin unavailable/i.test(text)) {
-        a.browser = "invalidated";
-        a.browserMessage = "Orca reset this browser request (the plugin was refreshed or updated). Choose Continue in browser again.";
-      } else if (/confirmation pending/i.test(text)) {
-        a.browser = "confirming";
-      } else {
-        a.browser = "unavailable";
-        a.browserMessage = UNAVAILABLE;
-      }
-      this.releaseHost(a);
-    } finally {
-      a.opening = false;
-    }
   }
   // ---------- tokens for API calls ----------
   async markExpired(profile) {
     if ((await this.profile())?.connectionId !== profile.connectionId) return;
-    await this.host.call("secrets.delete", { key: "oauth" });
-    await this.host.call("storage.set", { key: "connection", value: { ...profile, expired: true } });
+    await this.port.secrets.delete("oauth");
+    await this.port.storage.set("connection", { ...profile, expired: true });
+    this.changed();
   }
   async refresh(profile, tokens) {
     if (!this.refreshing)
@@ -11937,9 +11873,9 @@ var Connection = class {
     try {
       const profile = await this.profile();
       const tokens = await this.tokens();
-      await this.host.call("storage.delete", { key: "connection" });
-      await this.host.call("secrets.delete", { key: "oauth" });
-      await this.host.call("secrets.delete", { key: "pat" });
+      await this.port.storage.delete("connection");
+      await this.port.secrets.delete("oauth");
+      await this.port.secrets.delete("pat");
       if (profile && tokens) {
         for (const [token, hint] of [
           [tokens.refreshToken, "refresh_token"],
@@ -11953,6 +11889,7 @@ var Connection = class {
     } finally {
       this.changing = false;
     }
+    this.changed();
     return { signedOut: true, revoked };
   }
   async client() {
@@ -11990,199 +11927,6 @@ var Connection = class {
     };
   }
 };
-
-// src/shared/contracts.ts
-var repoInput = external_exports.object({
-  owner: external_exports.string().min(1).max(255),
-  repo: external_exports.string().min(1).max(255)
-});
-var pullInput = repoInput.extend({ number: external_exports.number().int().positive() });
-var sha = external_exports.string().regex(/^[a-f0-9]{40}$/);
-var fileSchema = external_exports.object({
-  path: external_exports.string().min(1).max(4096),
-  oldPath: external_exports.string().max(4096).optional(),
-  status: external_exports.enum(["added", "deleted", "modified", "renamed", "copied"]),
-  additions: external_exports.number().int().nonnegative(),
-  deletions: external_exports.number().int().nonnegative(),
-  binary: external_exports.boolean().optional()
-});
-var contextSchema = pullInput.extend({
-  connectionId: external_exports.string(),
-  baseSha: sha,
-  headSha: sha
-});
-var sideSchema = external_exports.discriminatedUnion("kind", [
-  external_exports.object({ kind: external_exports.literal("text"), content: external_exports.string().max(2 * 1024 * 1024) }),
-  external_exports.object({ kind: external_exports.literal("absent") }),
-  external_exports.object({ kind: external_exports.literal("binary"), size: external_exports.number().nonnegative().optional() }),
-  external_exports.object({
-    kind: external_exports.literal("limited"),
-    size: external_exports.number().nonnegative().optional(),
-    reason: external_exports.string().max(512)
-  }),
-  external_exports.object({ kind: external_exports.literal("error"), code: external_exports.string().max(64), message: external_exports.string().max(512) })
-]);
-var pullSchema = external_exports.object({
-  number: external_exports.number(),
-  title: external_exports.string(),
-  state: external_exports.string(),
-  body: external_exports.string().nullable().optional(),
-  sourceBranch: external_exports.string(),
-  targetBranch: external_exports.string(),
-  author: external_exports.object({ username: external_exports.string() }),
-  isDraft: external_exports.boolean().optional(),
-  sourceSha: external_exports.string().nullable().optional(),
-  createdAt: external_exports.string().optional(),
-  updatedAt: external_exports.string().optional(),
-  reviewCount: external_exports.number().optional()
-});
-function pullPath(input) {
-  return `/api/v1/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}/pulls/${input.number}`;
-}
-
-// src/worker/pr-review.ts
-var diffSchema = external_exports.object({
-  diff: external_exports.object({
-    baseSha: sha,
-    headSha: sha,
-    files: external_exports.array(
-      fileSchema.extend({ patch: external_exports.string().optional(), truncated: external_exports.boolean().optional() })
-    )
-  })
-});
-var blobSchema = external_exports.object({
-  size: external_exports.number().nonnegative().optional(),
-  isBinary: external_exports.boolean(),
-  content: external_exports.string().nullable()
-});
-var SIDE_LIMIT = 2 * 1024 * 1024;
-var DIFF_LIMIT = 32 * 1024 * 1024;
-var failed = (code, message) => ({ kind: "error", code, message });
-var STALE = failed(
-  "revision_changed",
-  "The pull request changed since this review opened. Reopen it from the CV Hub panel."
-);
-async function fetchDiff(client, pull) {
-  return diffSchema.parse(await client.json(`${pullPath(pull)}/diff`, DIFF_LIMIT)).diff;
-}
-var DiffCache = class _DiffCache {
-  constructor(capacity = 4) {
-    this.capacity = capacity;
-  }
-  entries = /* @__PURE__ */ new Map();
-  static key(connectionId, pull, base, head) {
-    return JSON.stringify([connectionId, pull.owner, pull.repo, pull.number, base, head]);
-  }
-  put(connectionId, pull, diff) {
-    const key = _DiffCache.key(connectionId, pull, diff.baseSha, diff.headSha);
-    this.entries.delete(key);
-    this.entries.set(key, diff);
-    while (this.entries.size > this.capacity) this.entries.delete(this.entries.keys().next().value);
-  }
-  async get(context, client) {
-    const hit = this.entries.get(_DiffCache.key(context.connectionId, context, context.baseSha, context.headSha));
-    if (hit) return hit;
-    const diff = await fetchDiff(client, context);
-    if (diff.baseSha !== context.baseSha || diff.headSha !== context.headSha) return null;
-    this.put(context.connectionId, context, diff);
-    return diff;
-  }
-};
-function reversePatch(modified, patch) {
-  const endsWithNewline = modified.endsWith("\n");
-  const after = modified === "" ? [] : modified.split("\n");
-  if (endsWithNewline) after.pop();
-  const lines = patch === "" ? [] : patch.split("\n");
-  if (patch.endsWith("\n")) lines.pop();
-  const before = [];
-  let cursor = 0;
-  let last = null;
-  let oldMissingNewline = false;
-  for (const line of lines) {
-    if (line.startsWith("@@")) {
-      const m = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(line);
-      if (!m) return null;
-      const start = m[2] === "0" ? Number(m[1]) : Number(m[1]) - 1;
-      if (start < cursor || start > after.length) return null;
-      before.push(...after.slice(cursor, start));
-      cursor = start;
-      last = null;
-      continue;
-    }
-    const mark = line[0];
-    const text = line.slice(1);
-    if (mark === " " || mark === "+") {
-      if (cursor >= after.length || after[cursor] !== text) return null;
-      cursor++;
-      if (mark === " ") before.push(text);
-      last = mark === " " ? "both" : "new";
-    } else if (mark === "-") {
-      before.push(text);
-      last = "old";
-    } else if (mark === "\\") {
-      if (last === "old" || last === "both") oldMissingNewline = true;
-    } else return null;
-  }
-  const reachesEnd = lines.length > 0 && cursor === after.length;
-  before.push(...after.slice(cursor));
-  if (before.length === 0) return "";
-  const newline = reachesEnd ? !oldMissingNewline : endsWithNewline;
-  return before.join("\n") + (newline ? "\n" : "");
-}
-var byteLength = (text) => new TextEncoder().encode(text).length;
-var tooLarge = (size) => ({ kind: "limited", reason: "File exceeds the native review size limit", size });
-async function readReviewFile(args, client, diffs) {
-  const { context, file } = external_exports.object({ context: contextSchema, file: fileSchema }).parse(args);
-  if (context.connectionId !== client.connectionId) {
-    const stale = failed("connection_changed", "You signed in again since this review opened. Reopen it from the CV Hub panel.");
-    return { original: stale, modified: stale };
-  }
-  let diff;
-  try {
-    diff = await diffs.get(context, client);
-  } catch (error2) {
-    const side = failure(error2);
-    return { original: side, modified: side };
-  }
-  const entry = diff?.files.find((f) => f.path === file.path && f.oldPath === file.oldPath);
-  if (!entry) return { original: STALE, modified: STALE };
-  if (entry.binary)
-    return {
-      original: file.status === "added" ? { kind: "absent" } : { kind: "binary" },
-      modified: file.status === "deleted" ? { kind: "absent" } : { kind: "binary" }
-    };
-  const modified = file.status === "deleted" ? { kind: "absent" } : await loadBlob(client, context, file.path);
-  if (file.status === "added") return { original: { kind: "absent" }, modified };
-  if (entry.truncated)
-    return { original: { kind: "limited", reason: "This file\u2019s change is too large for CV Hub to send in full" }, modified };
-  if (modified.kind !== "text" && modified.kind !== "absent") return { original: modified, modified };
-  const original = reversePatch(modified.kind === "text" ? modified.content : "", entry.patch ?? "");
-  if (original === null)
-    return { original: failed("patch_mismatch", "CV Hub\u2019s patch doesn\u2019t match this file. Reopen the review to try again."), modified };
-  const size = byteLength(original);
-  return { original: size > SIDE_LIMIT ? tooLarge(size) : { kind: "text", content: original }, modified };
-}
-async function loadBlob(client, context, path) {
-  const encoded = path.split("/").map(encodeURIComponent).join("/");
-  const url2 = `/api/v1/repos/${encodeURIComponent(context.owner)}/${encodeURIComponent(context.repo)}/blob/${context.headSha}/${encoded}`;
-  try {
-    const blob = blobSchema.parse(await client.json(url2, 16 * 1024 * 1024));
-    if (blob.isBinary) return { kind: "binary", ...blob.size != null ? { size: blob.size } : {} };
-    const content = blob.content ?? "";
-    const size = byteLength(content);
-    return size > SIDE_LIMIT ? tooLarge(size) : { kind: "text", content };
-  } catch (error2) {
-    return failure(error2);
-  }
-}
-function failure(error2) {
-  const text = error2 instanceof Error ? error2.message : "";
-  if (text.startsWith("[not_found]")) return failed("not_found", "This file is unavailable at the reviewed revision.");
-  if (text.startsWith("[forbidden]") || text.startsWith("[unauthorized]") || text.startsWith("[session_expired]"))
-    return failed("unauthorized", "CV Hub refused access. Sign in again from the CV Hub panel.");
-  if (text.startsWith("[too_large]")) return { kind: "limited", reason: "File exceeds the native review size limit" };
-  return failed("unavailable", "CV Hub couldn\u2019t load this file. Close and reopen the review to try again.");
-}
 
 // node_modules/.pnpm/zod@3.25.76/node_modules/zod/v4/core/core.js
 var NEVER2 = Object.freeze({
@@ -12379,10 +12123,10 @@ function assignProp(target, prop, value) {
     configurable: true
   });
 }
-function getElementAtPath(obj2, path) {
+function getElementAtPath(obj, path) {
   if (!path)
-    return obj2;
-  return path.reduce((acc, key) => acc?.[key], obj2);
+    return obj;
+  return path.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -12397,14 +12141,14 @@ function promiseAllObject(promisesObj) {
 }
 function randomString(length = 10) {
   const chars = "abcdefghijklmnopqrstuvwxyz";
-  let str2 = "";
+  let str = "";
   for (let i = 0; i < length; i++) {
-    str2 += chars[Math.floor(Math.random() * chars.length)];
+    str += chars[Math.floor(Math.random() * chars.length)];
   }
-  return str2;
+  return str;
 }
-function esc(str2) {
-  return JSON.stringify(str2);
+function esc(str) {
+  return JSON.stringify(str);
 }
 var captureStackTrace = Error.captureStackTrace ? Error.captureStackTrace : (..._args) => {
 };
@@ -12492,8 +12236,8 @@ var getParsedType2 = (data) => {
 };
 var propertyKeyTypes = /* @__PURE__ */ new Set(["string", "number", "symbol"]);
 var primitiveTypes = /* @__PURE__ */ new Set(["string", "number", "bigint", "boolean", "symbol", "undefined"]);
-function escapeRegex(str2) {
-  return str2.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 function clone(inst, def, params) {
   const cl = new inst._zod.constr(def ?? inst._zod.def);
@@ -12754,8 +12498,8 @@ function issue(...args) {
   }
   return { ...iss };
 }
-function cleanEnum(obj2) {
-  return Object.entries(obj2).filter(([k, _]) => {
+function cleanEnum(obj) {
+  return Object.entries(obj).filter(([k, _]) => {
     return Number.isNaN(Number.parseInt(k, 10));
   }).map((el) => el[1]);
 }
@@ -17667,8 +17411,8 @@ var UrlElicitationRequiredError = class extends McpError {
 };
 
 // node_modules/.pnpm/@modelcontextprotocol+sdk@1.30.0_zod@3.25.76/node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/interfaces.js
-function isTerminal(status2) {
-  return status2 === "completed" || status2 === "failed" || status2 === "cancelled";
+function isTerminal(status) {
+  return status === "completed" || status === "failed" || status === "cancelled";
 }
 
 // node_modules/.pnpm/zod-to-json-schema@3.25.2_zod@3.25.76/node_modules/zod-to-json-schema/dist/esm/parsers/string.js
@@ -18585,8 +18329,8 @@ var Protocol = class {
         }
         return task;
       },
-      storeTaskResult: async (taskId, status2, result) => {
-        await taskStore.storeTaskResult(taskId, status2, result, sessionId);
+      storeTaskResult: async (taskId, status, result) => {
+        await taskStore.storeTaskResult(taskId, status, result, sessionId);
         const task = await taskStore.getTask(taskId, sessionId);
         if (task) {
           const notification = TaskStatusNotificationSchema.parse({
@@ -18602,15 +18346,15 @@ var Protocol = class {
       getTaskResult: (taskId) => {
         return taskStore.getTaskResult(taskId, sessionId);
       },
-      updateTaskStatus: async (taskId, status2, statusMessage) => {
+      updateTaskStatus: async (taskId, status, statusMessage) => {
         const task = await taskStore.getTask(taskId, sessionId);
         if (!task) {
           throw new McpError(ErrorCode.InvalidParams, `Task "${taskId}" not found - it may have been cleaned up`);
         }
         if (isTerminal(task.status)) {
-          throw new McpError(ErrorCode.InvalidParams, `Cannot update task "${taskId}" from terminal status "${task.status}" to "${status2}". Terminal states (completed, failed, cancelled) cannot transition to other states.`);
+          throw new McpError(ErrorCode.InvalidParams, `Cannot update task "${taskId}" from terminal status "${task.status}" to "${status}". Terminal states (completed, failed, cancelled) cannot transition to other states.`);
         }
-        await taskStore.updateTaskStatus(taskId, status2, statusMessage, sessionId);
+        await taskStore.updateTaskStatus(taskId, status, statusMessage, sessionId);
         const updatedTask = await taskStore.getTask(taskId, sessionId);
         if (updatedTask) {
           const notification = TaskStatusNotificationSchema.parse({
@@ -18911,15 +18655,15 @@ function applyElicitationDefaults(schema, data) {
   if (!schema || data === null || typeof data !== "object")
     return;
   if (schema.type === "object" && schema.properties && typeof schema.properties === "object") {
-    const obj2 = data;
+    const obj = data;
     const props = schema.properties;
     for (const key of Object.keys(props)) {
       const propSchema = props[key];
-      if (obj2[key] === void 0 && Object.prototype.hasOwnProperty.call(propSchema, "default")) {
-        obj2[key] = propSchema.default;
+      if (obj[key] === void 0 && Object.prototype.hasOwnProperty.call(propSchema, "default")) {
+        obj[key] = propSchema.default;
       }
-      if (obj2[key] !== void 0) {
-        applyElicitationDefaults(propSchema, obj2[key]);
+      if (obj[key] !== void 0) {
+        applyElicitationDefaults(propSchema, obj[key]);
       }
     }
   }
@@ -20607,14 +20351,14 @@ var StreamableHTTPClientTransport = class {
    * @param attempt Current reconnection attempt count for the specific stream
    * @returns Time to wait in milliseconds before next reconnection attempt
    */
-  _getNextReconnectionDelay(attempt2) {
+  _getNextReconnectionDelay(attempt) {
     if (this._serverRetryMs !== void 0) {
       return this._serverRetryMs;
     }
     const initialDelay = this._reconnectionOptions.initialReconnectionDelay;
     const growFactor = this._reconnectionOptions.reconnectionDelayGrowFactor;
     const maxDelay = this._reconnectionOptions.maxReconnectionDelay;
-    return Math.min(initialDelay * Math.pow(growFactor, attempt2), maxDelay);
+    return Math.min(initialDelay * Math.pow(growFactor, attempt), maxDelay);
   }
   /**
    * Schedule a reconnection attempt using server-provided retry interval or backoff
@@ -20903,15 +20647,15 @@ var StreamableHTTPClientTransport = class {
 };
 
 // src/worker/mcp-client.ts
-async function searchCode(connection2, input) {
-  const endpoint = new URL(connection2.mcpUrl);
-  if (endpoint.origin !== connection2.origin) throw new Error("MCP origin mismatch");
+async function searchCode(connection, input) {
+  const endpoint = new URL(connection.mcpUrl);
+  if (endpoint.origin !== connection.origin) throw new Error("MCP origin mismatch");
   const client = new Client({ name: "cv-hub-orca", version: "0.1.0" });
   const transport = new StreamableHTTPClientTransport(endpoint, {
-    requestInit: { headers: { Authorization: `Bearer ${connection2.token}` }, redirect: "error" },
+    requestInit: { headers: { Authorization: `Bearer ${connection.token}` }, redirect: "error" },
     fetch: async (url2, init) => {
       const target = new URL(url2);
-      if (target.origin !== connection2.origin) throw new Error("MCP origin mismatch");
+      if (target.origin !== connection.origin) throw new Error("MCP origin mismatch");
       return fetch(url2, {
         ...init,
         redirect: "error",
@@ -20935,7 +20679,7 @@ async function searchCode(connection2, input) {
     const text = response.content.filter((item) => item.type === "text").map((item) => item.text ?? "").join("\n");
     if (response.isError)
       throw new Error(
-        text.replaceAll(connection2.token, "[redacted]").slice(0, 512) || "Code search failed"
+        text.replaceAll(connection.token, "[redacted]").slice(0, 512) || "Code search failed"
       );
     if (text.length > 1024 * 1024) throw new Error("Search response is too large");
     return external_exports.array(
@@ -20956,308 +20700,90 @@ async function searchCode(connection2, input) {
   }
 }
 
-// src/shared/panel-schema.ts
-var definition = external_exports.object({
-  type: external_exports.enum(["object", "array", "string", "number", "integer", "boolean", "null"]),
-  properties: external_exports.record(external_exports.string(), external_exports.unknown()).optional(),
-  required: external_exports.array(external_exports.string()).max(64).optional(),
-  additionalProperties: external_exports.literal(false).optional(),
-  items: external_exports.unknown().optional(),
-  maxItems: external_exports.number().int().min(0).max(2e3).optional(),
-  minLength: external_exports.number().int().min(0).max(49152).optional(),
-  maxLength: external_exports.number().int().min(0).max(49152).optional(),
-  minimum: external_exports.number().finite().optional(),
-  maximum: external_exports.number().finite().optional(),
-  enum: external_exports.array(external_exports.string().max(512)).min(1).max(64).optional(),
-  nullable: external_exports.boolean().optional()
-}).strict();
-var KEYWORDS = {
-  object: ["properties", "required", "additionalProperties"],
-  array: ["items", "maxItems"],
-  string: ["minLength", "maxLength", "enum"],
-  number: ["minimum", "maximum"],
-  integer: ["minimum", "maximum"],
-  boolean: [],
-  null: []
-};
-function compileDataSchema(input, depth = 0) {
-  if (depth > 8) throw new Error("schema nesting exceeds eight levels");
-  if (depth === 0 && JSON.stringify(input).length > 16384) throw new Error("schema exceeds 16 KiB");
-  const d = definition.parse(input);
-  const allowed = /* @__PURE__ */ new Set(["type", "nullable", ...KEYWORDS[d.type]]);
-  if (Object.keys(d).some((key) => !allowed.has(key)))
-    throw new Error("keyword does not apply to schema type");
-  let result;
-  switch (d.type) {
-    case "object": {
-      if (d.additionalProperties !== false) throw new Error("objects must reject additional properties");
-      const properties = Object.entries(d.properties ?? {});
-      if (properties.length > 64) throw new Error("too many object properties");
-      const required2 = new Set(d.required ?? []);
-      if ([...required2].some((key) => !Object.hasOwn(d.properties ?? {}, key)))
-        throw new Error("unknown required property");
-      const fields = {};
-      for (const [key, value] of properties) {
-        if (["__proto__", "constructor", "prototype"].includes(key)) throw new Error("reserved property");
-        const field = compileDataSchema(value, depth + 1);
-        fields[key] = required2.has(key) ? field : field.optional();
-      }
-      result = external_exports.object(fields).strict();
-      break;
-    }
-    case "array":
-      result = external_exports.array(compileDataSchema(d.items, depth + 1)).max(d.maxItems ?? 2e3);
-      break;
-    case "string": {
-      let value = external_exports.string().min(d.minLength ?? 0).max(d.maxLength ?? 49152);
-      if (d.enum) value = value.refine((text) => d.enum.includes(text));
-      result = value;
-      break;
-    }
-    case "number":
-    case "integer": {
-      let value = d.type === "integer" ? external_exports.number().int() : external_exports.number().finite();
-      if (d.minimum !== void 0) value = value.min(d.minimum);
-      if (d.maximum !== void 0) value = value.max(d.maximum);
-      result = value;
-      break;
-    }
-    case "boolean":
-      result = external_exports.boolean();
-      break;
-    case "null":
-      result = external_exports.null();
-      break;
-  }
-  return d.nullable ? result.nullable() : result;
-}
-var PANEL_PAYLOAD_LIMIT = 48 * 1024;
-var byteLength2 = (value) => new TextEncoder().encode(JSON.stringify(value)).length;
-var str = (maxLength, extra = {}) => ({ type: "string", maxLength, ...extra });
-var int2 = (minimum, maximum) => ({
-  type: "integer",
-  ...minimum === void 0 ? {} : { minimum },
-  ...maximum === void 0 ? {} : { maximum }
+// src/worker/pull-diff.ts
+var repoInput = external_exports.object({
+  owner: external_exports.string().min(1).max(255),
+  repo: external_exports.string().min(1).max(255)
 });
-var bool = () => ({ type: "boolean" });
-var nullable2 = (schema) => ({ ...schema, nullable: true });
-var arr = (items, maxItems) => ({ type: "array", items, maxItems });
-function obj(properties, optional2 = []) {
+var pullInput = repoInput.extend({ number: external_exports.number().int().positive() });
+var sha = external_exports.string().regex(/^[a-f0-9]{40}$/);
+function pullPath(input) {
+  return `/api/v1/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}/pulls/${input.number}`;
+}
+var fileSchema = external_exports.object({
+  path: external_exports.string().min(1).max(4096),
+  oldPath: external_exports.string().max(4096).optional(),
+  status: external_exports.enum(["added", "deleted", "modified", "renamed", "copied"]),
+  additions: external_exports.number().int().nonnegative(),
+  deletions: external_exports.number().int().nonnegative(),
+  binary: external_exports.boolean().optional()
+});
+var diffSchema = external_exports.object({
+  diff: external_exports.object({
+    baseSha: sha,
+    headSha: sha,
+    files: external_exports.array(
+      fileSchema.extend({ patch: external_exports.string().optional(), truncated: external_exports.boolean().optional() })
+    )
+  })
+});
+var DIFF_LIMIT = 32 * 1024 * 1024;
+async function fetchPullDiff(client, pull) {
+  return diffSchema.parse(await client.json(`${pullPath(pull)}/diff`, DIFF_LIMIT)).diff;
+}
+var PATCH_LIMIT = 60 * 1024;
+var TOTAL_PATCH_LIMIT = 320 * 1024;
+var FILE_LIMIT = 400;
+var byteLength = (text) => new TextEncoder().encode(text).length;
+function panelFile(file, budget) {
+  const hubTruncated = file.truncated === true;
+  const binary = file.binary === true;
+  if (binary || file.patch === void 0)
+    return {
+      path: file.path,
+      oldPath: file.oldPath ?? null,
+      status: file.status,
+      additions: file.additions,
+      deletions: file.deletions,
+      binary,
+      truncated: hubTruncated,
+      patch: null
+    };
+  let patch = file.patch;
+  let truncated = hubTruncated;
+  if (byteLength(patch) > PATCH_LIMIT) {
+    const cut = patch.lastIndexOf("\n", PATCH_LIMIT);
+    patch = patch.slice(0, cut > PATCH_LIMIT * 0.8 ? cut + 1 : PATCH_LIMIT);
+    truncated = true;
+  }
+  if (budget.total + byteLength(patch) > TOTAL_PATCH_LIMIT) {
+    patch = null;
+    truncated = true;
+  } else budget.total += byteLength(patch);
   return {
-    type: "object",
-    properties,
-    required: Object.keys(properties).filter((k) => !optional2.includes(k)),
-    additionalProperties: false
+    path: file.path,
+    oldPath: file.oldPath ?? null,
+    status: file.status,
+    additions: file.additions,
+    deletions: file.deletions,
+    binary,
+    truncated,
+    patch
+  };
+}
+function diffForPanel(diff) {
+  const budget = { total: 0 };
+  const shown = diff.files.slice(0, FILE_LIMIT);
+  return {
+    headSha: diff.headSha,
+    baseSha: diff.baseSha,
+    totalFiles: diff.files.length,
+    filesTruncated: diff.files.length > shown.length,
+    files: shown.map((file) => panelFile(file, budget))
   };
 }
 
-// src/shared/panel-contracts.ts
-var SHA = str(40, { minLength: 40 });
-var owner = str(256, { minLength: 1 });
-var repo = str(256, { minLength: 1 });
-var number4 = int2(1);
-var PAGE_SIZE = 20;
-var MERGE_METHODS = ["merge", "squash", "rebase"];
-var PULL_ACTIONS = ["close", "reopen", "ready", "draft"];
-var WORKSPACE_MATCH = ["matched", "no_worktree", "no_remote", "other_server", "not_found", "unsupported"];
-var ATTEMPT_PHASES = ["pending", "denied", "expired", "offline", "invalid_client", "error", "connected"];
-var BROWSER_STATES = ["idle", "confirming", "opened", "declined", "unavailable", "unverified", "rate_limited", "invalidated"];
-var connection = obj({
-  origin: str(2048),
-  webOrigin: nullable2(str(2048)),
-  mcpUrl: str(2048),
-  username: str(256),
-  userId: str(256),
-  displayName: nullable2(str(256)),
-  canWrite: bool(),
-  expired: bool()
-});
-var attempt = obj({
-  attemptId: str(64),
-  origin: str(2048),
-  phase: str(32, { enum: [...ATTEMPT_PHASES] }),
-  userCode: str(32),
-  verificationUri: str(2048),
-  expiresAt: int2(0),
-  message: nullable2(str(512)),
-  browser: str(32, { enum: [...BROWSER_STATES] }),
-  browserMessage: nullable2(str(512))
-});
-var status = obj({
-  connection: nullable2(connection),
-  legacy: nullable2(obj({ origin: str(2048), username: str(256) })),
-  attempt: nullable2(attempt)
-});
-var pullSummary = obj({
-  number: int2(1),
-  title: str(512),
-  state: str(32),
-  isDraft: bool(),
-  author: str(256),
-  updatedAt: nullable2(str(64))
-});
-var empty = obj({});
-var PANEL_COMMANDS = {
-  "cvhub.authStatus": { title: "CV Hub: Sign-in status", effect: "read", input: empty, output: status },
-  "cvhub.authStart": {
-    title: "CV Hub: Sign in",
-    effect: "write",
-    input: obj({ origin: str(2048, { minLength: 1 }) }),
-    output: attempt
-  },
-  "cvhub.authCancel": {
-    title: "CV Hub: Cancel sign-in",
-    effect: "write",
-    input: obj({ attemptId: nullable2(str(64)) }, ["attemptId"]),
-    output: status
-  },
-  "cvhub.authOpenVerification": {
-    title: "CV Hub: Continue sign-in in browser",
-    effect: "write",
-    input: obj({ attemptId: str(64, { minLength: 1 }) }),
-    output: obj({ requested: bool(), browser: str(32, { enum: [...BROWSER_STATES] }), browserMessage: nullable2(str(512)) })
-  },
-  "cvhub.disconnect": { title: "CV Hub: Sign out", effect: "write", input: empty, output: obj({ signedOut: bool(), revoked: bool() }) },
-  "cvhub.listRepositories": {
-    title: "CV Hub: List repositories",
-    effect: "read",
-    input: obj({ offset: int2(0, 1e6), search: str(100) }),
-    output: obj({ repositories: arr(obj({ owner: str(256), repo: str(256) }), PAGE_SIZE), total: int2(0) })
-  },
-  "cvhub.activeRepository": {
-    title: "CV Hub: Repository of the focused worktree",
-    effect: "read",
-    input: empty,
-    output: obj({
-      repository: nullable2(obj({ owner: str(256), repo: str(256) })),
-      source: str(16, { enum: ["workspace", "remembered", "none"] }),
-      workspace: str(32, { enum: [...WORKSPACE_MATCH] })
-    })
-  },
-  "cvhub.rememberRepository": {
-    title: "CV Hub: Remember the selected repository",
-    effect: "write",
-    input: obj({ owner, repo }),
-    output: obj({ ok: bool() })
-  },
-  "cvhub.listPulls": {
-    title: "CV Hub: List pull requests",
-    effect: "read",
-    input: obj({
-      owner,
-      repo,
-      offset: int2(0, 1e6),
-      state: str(16, { enum: ["open", "closed", "merged", "all"] }),
-      mine: bool()
-    }),
-    output: obj({ pulls: arr(pullSummary, PAGE_SIZE), total: int2(0) })
-  },
-  "cvhub.getPull": {
-    title: "CV Hub: Pull request details",
-    effect: "read",
-    input: obj({ owner, repo, number: number4 }),
-    output: obj({
-      number: int2(1),
-      title: str(512),
-      state: str(32),
-      isDraft: bool(),
-      author: str(256),
-      body: str(12e3),
-      sourceBranch: str(1024),
-      targetBranch: str(1024),
-      sourceSha: nullable2(str(40)),
-      createdAt: nullable2(str(64)),
-      updatedAt: nullable2(str(64)),
-      canWrite: bool(),
-      gate: nullable2(obj({ approvals: int2(0), required: int2(0), blockedBy: arr(str(256), 20), nonCountingApprovals: int2(0) }))
-    })
-  },
-  "cvhub.mergePull": {
-    title: "CV Hub: Merge pull request",
-    effect: "write",
-    input: obj({ owner, repo, number: number4, expectedHeadSha: SHA, method: str(16, { enum: [...MERGE_METHODS] }) }),
-    output: obj({ state: str(32) })
-  },
-  "cvhub.updatePullState": {
-    title: "CV Hub: Close, reopen or change draft state",
-    effect: "write",
-    input: obj({ owner, repo, number: number4, action: str(16, { enum: [...PULL_ACTIONS] }) }),
-    output: obj({ state: str(32), isDraft: bool() })
-  },
-  "cvhub.openPullRequest": {
-    title: "CV Hub: Open pull request in browser",
-    effect: "write",
-    input: obj({ owner, repo, number: number4 }),
-    output: obj({ opened: bool() })
-  },
-  "cvhub.getPullChecks": {
-    title: "CV Hub: Pull request checks",
-    effect: "read",
-    input: obj({ owner, repo, number: number4 }),
-    output: obj({
-      checks: arr(obj({ name: str(256), status: str(64), conclusion: nullable2(str(64)), durationMs: nullable2(int2(0)) }), 30),
-      total: int2(0)
-    })
-  },
-  "cvhub.listReviews": {
-    title: "CV Hub: Review history",
-    effect: "read",
-    input: obj({ owner, repo, number: number4 }),
-    output: obj({
-      reviews: arr(
-        obj({
-          id: str(64),
-          state: str(32),
-          body: str(1e3),
-          commitSha: nullable2(str(40)),
-          submittedAt: nullable2(str(64)),
-          reviewer: nullable2(str(256))
-        }),
-        20
-      ),
-      total: int2(0)
-    })
-  },
-  "cvhub.submitReview": {
-    title: "CV Hub: Submit review",
-    effect: "write",
-    input: obj({
-      owner,
-      repo,
-      number: number4,
-      expectedHeadSha: SHA,
-      state: str(32, { enum: ["approved", "changes_requested", "commented"] }),
-      body: str(12e3)
-    }),
-    output: obj({ id: str(64), state: str(32) })
-  },
-  "cvhub.searchCode": {
-    title: "CV Hub: Search code",
-    effect: "read",
-    input: obj({ owner, repo, query: str(1e3, { minLength: 1 }) }),
-    output: obj({
-      results: arr(obj({ path: str(4096), symbol: str(512), line: nullable2(int2(0)), content: str(1200) }), 8)
-    })
-  }
-};
-var PRIVATE_COMMANDS = {
-  "cvhub.getReview": "CV Hub: Load review snapshot",
-  "cvhub.readReviewFile": "CV Hub: Read review file"
-};
-var REVIEW_PROVIDER = {
-  id: "cvhub.pullRequest",
-  title: "CV Hub pull request",
-  snapshotCommand: "cvhub.getReview",
-  contentCommand: "cvhub.readReviewFile",
-  input: obj({ owner, repo, number: number4 })
-};
-
 // src/worker/workspace-repo.ts
-var workspaceContextSchema = external_exports.object({
-  branch: external_exports.string(),
-  displayName: external_exports.string(),
-  remotes: external_exports.array(external_exports.object({ name: external_exports.string(), url: external_exports.string() })).optional()
-}).passthrough().nullable();
 function splitRemote(url2) {
   const scp = /^[^@/\s]+@([^:/\s]+):(?!\/\/)(.+)$/.exec(url2);
   if (scp) return { host: scp[1].toLowerCase(), path: scp[2] };
@@ -21269,20 +20795,20 @@ function splitRemote(url2) {
     return null;
   }
 }
-function servesGit(apiOrigin, host) {
+function servesGit(apiOrigin, host2) {
   const api = new URL(apiOrigin).hostname.toLowerCase();
-  if (isLoopback(api)) return isLoopback(host);
+  if (isLoopback(api)) return isLoopback(host2);
   const base = api.replace(/^api\./, "");
-  return host === api || host === base || host === `git.${base}`;
+  return host2 === api || host2 === base || host2 === `git.${base}`;
 }
 function repoFromRemote(apiOrigin, url2) {
   const remote = splitRemote(url2.trim());
   if (!remote || !servesGit(apiOrigin, remote.host)) return null;
   const parts = remote.path.replace(/\/+$/, "").replace(/\.git$/, "").split("/").filter(Boolean);
   if (parts.length < 2) return null;
-  const [owner2, repo2] = parts.slice(-2);
+  const [owner, repo] = parts.slice(-2);
   const ok = (s) => s.length <= 255 && /^[A-Za-z0-9._-]+$/.test(s) && s !== "." && s !== "..";
-  return ok(owner2) && ok(repo2) ? { owner: owner2, repo: repo2 } : null;
+  return ok(owner) && ok(repo) ? { owner, repo } : null;
 }
 function candidateRepos(apiOrigin, remotes) {
   const ordered = [...remotes].sort((a, b) => Number(b.name === "origin") - Number(a.name === "origin"));
@@ -21298,18 +20824,35 @@ function candidateRepos(apiOrigin, remotes) {
   }
   return out;
 }
+function remotesFromGitOutput(stdout) {
+  const byName = /* @__PURE__ */ new Map();
+  for (const line of stdout.split("\n")) {
+    const match = /^(\S+)\t(\S+) \((fetch|push)\)$/.exec(line.trim());
+    if (!match) continue;
+    const [, name, url2, kind] = match;
+    if (kind === "push") continue;
+    if (!byName.has(name)) byName.set(name, { name, url: url2 });
+  }
+  return [...byName.values()];
+}
 
 // src/worker/activate.ts
+var execFile = promisify(execFileCallback);
 var clip = (value, max) => (value ?? "").slice(0, max);
 var nullableClip = (value, max) => value == null ? null : value.slice(0, max);
-function fitBudget(wrap, items, field, max) {
-  let limit = max;
-  let out = items;
-  while (limit > 40 && byteLength2(wrap(out)) > PANEL_PAYLOAD_LIMIT - 2048) {
-    limit = Math.floor(limit / 2);
-    out = items.map((item) => ({ ...item, [field]: item[field].slice(0, limit) }));
+var host = (origin) => {
+  try {
+    return new URL(origin).host;
+  } catch {
+    return origin;
   }
-  return out;
+};
+function sanitize(error2) {
+  if (error2 instanceof CvHubError) return error2;
+  if (error2 instanceof external_exports.ZodError) return new CvHubError("invalid_response", "CV Hub returned an unexpected response");
+  const text = error2 instanceof Error ? error2.message : "";
+  if (/^\[[a-z_]+\] /.test(text)) return new CvHubError("error", text.slice(0, 600));
+  return new CvHubError("error", "The request failed");
 }
 async function branchHead(client, pull) {
   const query = new URLSearchParams({ ref: `refs/heads/${pull.sourceBranch}`, limit: "1" });
@@ -21317,73 +20860,64 @@ async function branchHead(client, pull) {
   const head = commits[0]?.sha;
   return head && /^[a-f0-9]{40}$/.test(head) ? head : null;
 }
-function sanitize(error2) {
-  if (error2 instanceof CvHubError) return new Error(error2.message.slice(0, 600));
-  if (error2 instanceof external_exports.ZodError) return new Error("[invalid_response] CV Hub returned an unexpected response");
-  const text = error2 instanceof Error ? error2.message : "";
-  if (/^\[[a-z_]+\] /.test(text)) return new Error(text.slice(0, 600));
-  return new Error("[error] The request failed");
-}
-function registerCommands(orca, fetcher, clock) {
-  const connection2 = new Connection(orca.host, fetcher, clock);
-  const diffs = new DiffCache();
-  const outputs = new Map(Object.entries(PANEL_COMMANDS).map(([id, c]) => [id, compileDataSchema(c.output)]));
-  const inputs = new Map(Object.entries(PANEL_COMMANDS).map(([id, c]) => [id, compileDataSchema(c.input)]));
-  const panel = (name, handler) => {
-    const id = `cvhub.${name}`;
-    const input = inputs.get(id);
-    const output = outputs.get(id);
-    if (!input || !output) throw new Error(`No panel contract for ${id}`);
-    orca.commands.register(id, async (args) => {
-      try {
-        const parsed = input.parse(args ?? {});
-        const result = output.parse(await handler(parsed));
-        if (byteLength2(result) > PANEL_PAYLOAD_LIMIT) throw new CvHubError("too_large", "The result is too large to show");
-        return result;
-      } catch (error2) {
-        throw sanitize(error2);
-      }
+var repoArgs = external_exports.object({ owner: external_exports.string().min(1).max(255), repo: external_exports.string().min(1).max(255) });
+var pullArgs = repoArgs.extend({ number: external_exports.number().int().positive() });
+var listArgs = repoArgs.extend({
+  offset: external_exports.number().int().min(0).max(1e6),
+  state: external_exports.enum(["open", "closed", "merged", "all"]),
+  mine: external_exports.boolean()
+});
+var submitArgs = pullArgs.extend({
+  expectedHeadSha: sha,
+  state: external_exports.enum(["approved", "changes_requested", "commented"]),
+  body: external_exports.string().max(12e3)
+});
+var searchArgs = repoArgs.extend({ query: external_exports.string().min(1).max(1e3) });
+function registerPlugin(orca, deps = {}) {
+  const connection = new Connection(
+    { storage: orca.storage, secrets: orca.secrets },
+    deps.fetcher,
+    deps.clock,
+    () => void publishAuth()
+  );
+  async function signInOrigin() {
+    const setting = await orca.settings.get("apiOrigin");
+    const configured = typeof setting === "string" ? setting.trim() : "";
+    if (configured && configured !== DEFAULT_ORIGIN) return configured;
+    const status = await connection.status();
+    return status.connection?.origin ?? status.legacy?.origin ?? (configured || DEFAULT_ORIGIN);
+  }
+  async function authStatus() {
+    const status = await connection.status();
+    return { ...status, apiOrigin: await signInOrigin() };
+  }
+  let wasConnected = false;
+  async function publishAuth() {
+    let status;
+    try {
+      status = await authStatus();
+    } catch {
+      return;
+    }
+    orca.panels.post("auth.changed", { status });
+    if (status.connection && !status.connection.expired && !wasConnected) {
+      await orca.host.call("notifications.show", {
+        title: "CV Hub",
+        body: `Signed in to CV Hub as @${status.connection.username}.`
+      }).catch(() => void 0);
+      void refocus(lastWorkspaceId);
+    }
+    wasConnected = status.connection !== null && !status.connection.expired;
+    void refreshStatusItem();
+  }
+  function publishContext() {
+    orca.panels.post("context.changed", {
+      repository: focused?.repo ?? null,
+      workspace: focusedWhy
     });
-  };
-  const worker = (name, handler) => {
-    const id = `cvhub.${name}`;
-    if (!PRIVATE_COMMANDS[id]) throw new Error(`${id} is not a declared private command`);
-    orca.commands.register(id, async (args) => {
-      try {
-        return await handler(args);
-      } catch (error2) {
-        throw sanitize(error2);
-      }
-    });
-  };
-  panel("authStatus", () => connection2.status());
-  panel("authStart", (args) => connection2.start(args));
-  panel("authCancel", (args) => connection2.cancel({ attemptId: args.attemptId ?? void 0 }));
-  panel("authOpenVerification", (args) => connection2.openVerification(args));
-  panel("disconnect", () => connection2.disconnect());
-  panel("listRepositories", async (args) => {
-    const client = await connection2.client();
-    const response = external_exports.object({
-      repositories: external_exports.array(external_exports.object({ slug: external_exports.string(), owner: external_exports.object({ slug: external_exports.string() }).nullable() })),
-      pagination: external_exports.object({ total: external_exports.number() })
-    }).parse(
-      await client.json(
-        `/api/v1/repos?${new URLSearchParams({ provider: "local", limit: String(PAGE_SIZE), offset: String(args.offset), search: args.search })}`
-      )
-    );
-    return {
-      repositories: response.repositories.filter((r) => r.owner).slice(0, PAGE_SIZE).map((r) => ({ owner: clip(r.owner.slug, 256), repo: clip(r.slug, 256) })),
-      total: Math.max(0, Math.floor(response.pagination.total))
-    };
-  });
-  const gateSchema = external_exports.object({
-    approvals: external_exports.number(),
-    required: external_exports.number(),
-    blockedBy: external_exports.array(external_exports.object({ username: external_exports.string() })),
-    nonCountingApprovals: external_exports.number().optional()
-  }).nullable().optional().catch(null);
+  }
   const known = /* @__PURE__ */ new Map();
-  const exists = async (client, ref) => {
+  async function exists(client, ref) {
     const key = `${client.connectionId}|${ref.owner}/${ref.repo}`.toLowerCase();
     const cached2 = known.get(key);
     if (cached2 !== void 0) return cached2;
@@ -21396,32 +20930,139 @@ function registerCommands(orca, fetcher, clock) {
       if (known.size > 200) known.clear();
       return false;
     }
-  };
-  const remembered = async (connectionId) => {
-    const stored = external_exports.object({ value: external_exports.object({ connectionId: external_exports.string(), owner: external_exports.string(), repo: external_exports.string() }).nullable().catch(null) }).catch({ value: null }).parse(await orca.host.call("storage.get", { key: "lastRepository" }));
-    return stored.value && stored.value.connectionId === connectionId ? { owner: stored.value.owner, repo: stored.value.repo } : null;
-  };
-  panel("activeRepository", async () => {
-    const client = await connection2.client();
-    let workspace = "unsupported";
-    try {
-      const context = workspaceContextSchema.parse(await orca.host.call("workspace.readContext", {}));
-      if (!context) workspace = "no_worktree";
-      else if (context.remotes) {
-        const candidates = candidateRepos(client.origin, context.remotes);
-        workspace = !context.remotes.length ? "no_remote" : !candidates.length ? "other_server" : "not_found";
-        for (const ref of candidates.slice(0, 4))
-          if (await exists(client, ref)) return { repository: ref, source: "workspace", workspace: "matched" };
+  }
+  let lastWorkspaceId;
+  let focused = null;
+  let focusedWhy = "no_workspace";
+  async function remotesForWorkspace(workspaceId) {
+    const listed = external_exports.object({ workspaces: external_exports.array(external_exports.object({ id: external_exports.string(), path: external_exports.string() })) }).parse(await orca.host.call("workspace.list"));
+    const workspace = listed.workspaces.find((w) => w.id === workspaceId);
+    if (!workspace) return null;
+    const { stdout } = await execFile("git", ["-C", workspace.path, "remote", "-v"], {
+      timeout: 1e4,
+      maxBuffer: 1024 * 1024
+    });
+    return remotesFromGitOutput(stdout);
+  }
+  let refocusing = Promise.resolve();
+  function refocus(workspaceId) {
+    lastWorkspaceId = workspaceId;
+    const run = detect(workspaceId);
+    refocusing = run.catch(() => void 0);
+    return run;
+  }
+  async function detect(workspaceId) {
+    let found = null;
+    let why = workspaceId ? "not_found" : "no_workspace";
+    let remotes = null;
+    if (workspaceId) {
+      try {
+        remotes = await remotesForWorkspace(workspaceId);
+      } catch {
+        remotes = null;
       }
-    } catch {
+      if (remotes === null) why = "offline";
+      else if (remotes.length === 0) why = "no_remote";
+      else {
+        const origin = (await connection.profile())?.origin ?? await signInOrigin();
+        const candidates = candidateRepos(origin, remotes);
+        if (candidates.length === 0) why = "other_server";
+        else
+          try {
+            const client = await connection.client();
+            for (const ref of candidates.slice(0, 4)) {
+              if (await exists(client, ref)) {
+                found = { repo: ref };
+                why = "matched";
+                break;
+              }
+            }
+          } catch {
+          }
+      }
     }
-    const last = await remembered(client.connectionId);
-    return last ? { repository: last, source: "remembered", workspace } : { repository: null, source: "none", workspace };
+    if (workspaceId !== lastWorkspaceId) return;
+    focused = found;
+    focusedWhy = why;
+    publishContext();
+    void refreshStatusItem();
+  }
+  const events = orca.events.on("workspace.changed", ({ context }) => {
+    void refocus(context?.workspaceId);
   });
-  panel("rememberRepository", async (args) => {
-    const client = await connection2.client();
-    await orca.host.call("storage.set", { key: "lastRepository", value: { connectionId: client.connectionId, ...args } });
-    return { ok: true };
+  async function updateStatusItem(fields) {
+    if (!orca.host.has("statusBar.update")) return;
+    await orca.host.call("statusBar.update", { id: STATUS_BAR_ID, ...fields }).catch(() => void 0);
+  }
+  async function refreshStatusItem() {
+    const status = await connection.status();
+    if (!status.connection || status.connection.expired) {
+      await updateStatusItem({ text: "CV Hub: sign in", tone: "accent", tooltip: "Sign in to CV Hub", visible: true });
+      return;
+    }
+    const repo = focused?.repo;
+    if (!repo) {
+      await updateStatusItem({ visible: false });
+      return;
+    }
+    try {
+      const client = await connection.client();
+      const query = new URLSearchParams({ state: "open", limit: "1" });
+      const { total } = external_exports.object({ total: external_exports.number() }).parse(
+        await client.json(
+          `/api/v1/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.repo)}/pulls?${query}`
+        )
+      );
+      const count = Math.max(0, Math.floor(total));
+      await updateStatusItem({
+        text: `CV Hub: ${count} open PR${count === 1 ? "" : "s"}`,
+        tone: "neutral",
+        tooltip: `${repo.owner}/${repo.repo} on ${host(status.connection.origin)}`,
+        visible: true
+      });
+    } catch {
+      await updateStatusItem({
+        text: "CV Hub",
+        tone: "neutral",
+        tooltip: `${repo.owner}/${repo.repo} \u2014 CV Hub is unreachable`,
+        visible: true
+      });
+    }
+  }
+  const statusTimer = setInterval(() => void refreshStatusItem(), 5 * 60 * 1e3);
+  function handle(name, handler) {
+    return orca.panels.handle(name, async (input) => {
+      try {
+        return await handler(input);
+      } catch (error2) {
+        throw sanitize(error2);
+      }
+    });
+  }
+  handle("auth.status", () => authStatus());
+  handle("auth.start", async () => await connection.start(await signInOrigin()));
+  handle("auth.cancel", async (input) => {
+    const { attemptId } = external_exports.object({ attemptId: external_exports.string().nullable() }).parse(input);
+    await connection.cancel(attemptId ?? void 0);
+    return authStatus();
+  });
+  handle("auth.signOut", () => connection.disconnect());
+  const PAGE_SIZE = 20;
+  handle("repos.list", async (input) => {
+    const args = external_exports.object({ offset: external_exports.number().int().min(0).max(1e6), search: external_exports.string().max(100) }).parse(input);
+    const client = await connection.client();
+    const response = external_exports.object({
+      repositories: external_exports.array(external_exports.object({ slug: external_exports.string(), owner: external_exports.object({ slug: external_exports.string() }).nullable() })),
+      pagination: external_exports.object({ total: external_exports.number() })
+    }).parse(
+      await client.json(
+        `/api/v1/repos?${new URLSearchParams({ provider: "local", limit: String(PAGE_SIZE), offset: String(args.offset), search: args.search })}`
+      )
+    );
+    return {
+      repositories: response.repositories.filter((r) => r.owner).slice(0, PAGE_SIZE).map((r) => ({ owner: clip(r.owner.slug, 256), repo: clip(r.slug, 256) })),
+      total: Math.max(0, Math.floor(response.pagination.total))
+    };
   });
   const pullItem = external_exports.object({
     number: external_exports.number().int().positive(),
@@ -21436,8 +21077,15 @@ function registerCommands(orca, fetcher, clock) {
     createdAt: external_exports.string().optional(),
     updatedAt: external_exports.string().optional()
   });
-  panel("listPulls", async (args) => {
-    const client = await connection2.client();
+  const gateSchema = external_exports.object({
+    approvals: external_exports.number(),
+    required: external_exports.number(),
+    blockedBy: external_exports.array(external_exports.object({ username: external_exports.string() })),
+    nonCountingApprovals: external_exports.number().optional()
+  }).nullable().optional().catch(null);
+  handle("pulls.list", async (input) => {
+    const args = listArgs.parse(input);
+    const client = await connection.client();
     const query = new URLSearchParams({ state: args.state, limit: String(PAGE_SIZE), offset: String(args.offset) });
     if (args.mine) query.set("author", client.userId);
     const response = external_exports.object({ pullRequests: external_exports.array(pullItem), total: external_exports.number() }).parse(await client.json(`/api/v1/repos/${encodeURIComponent(args.owner)}/${encodeURIComponent(args.repo)}/pulls?${query}`));
@@ -21453,8 +21101,9 @@ function registerCommands(orca, fetcher, clock) {
       total: Math.max(0, Math.floor(response.total))
     };
   });
-  panel("getPull", async (args) => {
-    const client = await connection2.client();
+  handle("pull.get", async (input) => {
+    const args = pullArgs.parse(input);
+    const client = await connection.client();
     const { pullRequest: p } = external_exports.object({ pullRequest: pullItem.extend({ gate: gateSchema }) }).parse(await client.json(pullPath(args)));
     const head = p.state === "open" ? await branchHead(client, { ...args, sourceBranch: p.sourceBranch }).catch(() => null) : null;
     const recorded = p.sourceSha && /^[a-f0-9]{40}$/.test(p.sourceSha) ? p.sourceSha : null;
@@ -21480,43 +21129,9 @@ function registerCommands(orca, fetcher, clock) {
       } : null
     };
   });
-  const requireWrite = (client, what) => {
-    if (!client.canWrite)
-      throw new CvHubError("read_only", `This sign-in was granted read-only access. Sign in again and allow repo:write to ${what}`);
-  };
-  const stateResult = external_exports.object({ pullRequest: external_exports.object({ state: external_exports.string(), isDraft: external_exports.boolean().optional() }) });
-  panel(
-    "mergePull",
-    async (args) => {
-      const client = await connection2.client();
-      requireWrite(client, "merge pull requests");
-      const { pullRequest } = external_exports.object({ pullRequest: pullItem }).parse(await client.json(pullPath(args)));
-      if (pullRequest.state !== "open")
-        throw new CvHubError("rejected", `This pull request is ${pullRequest.state === "draft" ? "a draft" : pullRequest.state}. Reload it`);
-      const head = await branchHead(client, { ...args, sourceBranch: pullRequest.sourceBranch });
-      if (head !== args.expectedHeadSha)
-        throw new CvHubError("stale_revision", "New commits were pushed. Reload the pull request before merging");
-      const result = stateResult.parse(
-        await client.json(`${pullPath(args)}/merge`, { method: "PUT", body: JSON.stringify({ mergeMethod: args.method }) })
-      );
-      return { state: clip(result.pullRequest.state, 32) };
-    }
-  );
-  panel("updatePullState", async (args) => {
-    const client = await connection2.client();
-    requireWrite(client, "change pull requests");
-    const request = args.action === "reopen" ? { path: `${pullPath(args)}/reopen`, init: { method: "POST" } } : {
-      path: pullPath(args),
-      init: {
-        method: "PATCH",
-        body: JSON.stringify(args.action === "close" ? { state: "closed" } : { isDraft: args.action === "draft" })
-      }
-    };
-    const result = stateResult.parse(await client.json(request.path, request.init));
-    return { state: clip(result.pullRequest.state, 32), isDraft: result.pullRequest.isDraft === true };
-  });
-  panel("getPullChecks", async (args) => {
-    const client = await connection2.client();
+  handle("pull.checks", async (input) => {
+    const args = pullArgs.parse(input);
+    const client = await connection.client();
     const result = external_exports.object({
       checks: external_exports.array(
         external_exports.object({
@@ -21537,8 +21152,9 @@ function registerCommands(orca, fetcher, clock) {
       total: result.checks.length
     };
   });
-  panel("listReviews", async (args) => {
-    const client = await connection2.client();
+  handle("pull.reviews", async (input) => {
+    const args = pullArgs.parse(input);
+    const client = await connection.client();
     const result = external_exports.object({
       reviews: external_exports.array(
         external_exports.object({
@@ -21552,100 +21168,120 @@ function registerCommands(orca, fetcher, clock) {
         })
       )
     }).parse(await client.json(`${pullPath(args)}/reviews`));
-    const reviews = result.reviews.slice(-20).map((r) => ({
-      id: clip(r.id, 64),
-      state: clip(r.state, 32),
-      body: clip(r.body, 1e3),
-      commitSha: r.commitSha && /^[a-f0-9]{40}$/.test(r.commitSha) ? r.commitSha : null,
-      submittedAt: nullableClip(r.submittedAt ?? r.createdAt, 64),
-      reviewer: nullableClip(r.reviewer?.username, 256)
-    }));
-    return { reviews: fitBudget((items) => ({ reviews: items, total: 0 }), reviews, "body", 1e3), total: result.reviews.length };
+    return {
+      // Newest last, keeping the latest 20.
+      reviews: result.reviews.slice(-20).map((r) => ({
+        id: clip(r.id, 64),
+        state: clip(r.state, 32),
+        body: clip(r.body, 1e3),
+        commitSha: r.commitSha && /^[a-f0-9]{40}$/.test(r.commitSha) ? r.commitSha : null,
+        submittedAt: nullableClip(r.submittedAt ?? r.createdAt, 64),
+        reviewer: nullableClip(r.reviewer?.username, 256)
+      })),
+      total: result.reviews.length
+    };
   });
-  panel(
-    "submitReview",
-    async (args) => {
-      const client = await connection2.client();
-      if (!client.canWrite)
-        throw new CvHubError(
-          "read_only",
-          "This sign-in was granted read-only access. Sign in again and allow repo:write to publish reviews"
-        );
-      const { pullRequest } = external_exports.object({ pullRequest: pullItem }).parse(await client.json(pullPath(args)));
-      const head = await branchHead(client, { ...args, sourceBranch: pullRequest.sourceBranch });
-      if (head !== args.expectedHeadSha)
-        throw new CvHubError("stale_revision", "The PR changed. Open and review its latest changes before submitting");
-      const result = external_exports.object({ review: external_exports.object({ id: external_exports.string(), state: external_exports.string() }) }).parse(
-        // Never retried: a lost response is reported as an unknown outcome.
-        await client.json(`${pullPath(args)}/reviews`, {
-          method: "POST",
-          body: JSON.stringify({ state: args.state, body: args.body, expectedHeadSha: args.expectedHeadSha })
-        })
-      );
-      return { id: clip(result.review.id, 64), state: clip(result.review.state, 32) };
-    }
-  );
-  panel("openPullRequest", async (args) => {
-    const { connection: signedIn } = await connection2.status();
-    if (!signedIn) throw new CvHubError("signed_out", "Sign in to CV Hub before opening a pull request");
-    try {
-      return external_exports.object({ opened: external_exports.boolean() }).parse(
-        await orca.host.call("browser.openExternal", { url: pullWebUrl(signedIn.origin, args, signedIn.webOrigin) })
-      );
-    } catch {
-      return { opened: false };
-    }
+  handle("pull.diff", async (input) => {
+    const args = pullInput.parse(input);
+    const client = await connection.client();
+    const diff = await fetchPullDiff({ json: (path, maxBytes) => client.json(path, {}, maxBytes) }, args);
+    return diffForPanel(diff);
   });
-  panel("searchCode", async (args) => {
-    const client = await connection2.client();
+  handle("review.submit", async (input) => {
+    const args = submitArgs.parse(input);
+    const client = await connection.client();
+    if (!client.canWrite)
+      throw new CvHubError(
+        "read_only",
+        "This sign-in was granted read-only access. Sign in again and allow repo:write to publish reviews"
+      );
+    const { pullRequest } = external_exports.object({ pullRequest: pullItem }).parse(await client.json(pullPath(args)));
+    const head = await branchHead(client, { ...args, sourceBranch: pullRequest.sourceBranch });
+    if (head !== args.expectedHeadSha)
+      throw new CvHubError("stale_revision", "The PR changed. Open and review its latest changes before submitting");
+    const result = external_exports.object({ review: external_exports.object({ id: external_exports.string(), state: external_exports.string() }) }).parse(
+      // Never retried: a lost response is reported as an unknown outcome.
+      await client.json(`${pullPath(args)}/reviews`, {
+        method: "POST",
+        body: JSON.stringify({ state: args.state, body: args.body, expectedHeadSha: args.expectedHeadSha })
+      })
+    );
+    return { id: clip(result.review.id, 64), state: clip(result.review.state, 32) };
+  });
+  handle("code.search", async (input) => {
+    const args = searchArgs.parse(input);
+    const client = await connection.client();
     const results = await searchCode(client, args);
-    const current = await connection2.status();
+    const current = await connection.status();
     if (current.connection?.userId !== client.userId || current.connection?.origin !== client.origin)
       throw new CvHubError("connection_changed", "The connection changed. Search again");
-    const items = results.slice(0, 8).map((r) => ({
-      path: clip(r.path, 4096),
-      symbol: clip(r.symbol, 512),
-      line: r.line == null || r.line < 0 ? null : Math.floor(r.line),
-      content: clip(r.content, 1200)
-    }));
-    return { results: fitBudget((list) => ({ results: list }), items, "content", 1200) };
-  });
-  worker("getReview", async (args) => {
-    const input = pullInput.parse(args);
-    const client = await connection2.client();
-    const json = (path, limit) => client.json(path, {}, limit);
-    const [pull, diff] = await Promise.all([
-      client.json(pullPath(input)).then((r) => external_exports.object({ pullRequest: external_exports.object({ title: external_exports.string() }) }).parse(r).pullRequest),
-      fetchDiff({ connectionId: client.connectionId, json }, input)
-    ]);
-    if (diff.files.length > 2e3)
-      throw new CvHubError("too_large", "This pull request changes more than 2,000 files, too many for Orca's review");
-    diffs.put(client.connectionId, input, diff);
     return {
-      title: `${input.owner}/${input.repo} #${input.number} \xB7 ${pull.title}`.slice(0, 512),
-      revision: diff.headSha,
-      context: { ...input, connectionId: client.connectionId, baseSha: diff.baseSha, headSha: diff.headSha },
-      files: diff.files.map((f) => ({
-        path: f.path,
-        ...f.oldPath ? { oldPath: f.oldPath } : {},
-        status: f.status,
-        additions: f.additions,
-        deletions: f.deletions,
-        ...f.binary ? { binary: true } : {}
+      results: results.slice(0, 8).map((r) => ({
+        path: clip(r.path, 4096),
+        symbol: clip(r.symbol, 512),
+        line: r.line == null || r.line < 0 ? null : Math.floor(r.line),
+        content: clip(r.content, 1200)
       }))
     };
   });
-  worker("readReviewFile", async (args) => {
-    const client = await connection2.client();
-    return readReviewFile(args, { connectionId: client.connectionId, json: (path, limit) => client.json(path, {}, limit) }, diffs);
+  handle("context.current", async () => {
+    await refocusing;
+    return { repository: focused?.repo ?? null, workspace: focusedWhy };
   });
+  async function notify(title, body) {
+    await orca.host.call("notifications.show", { title, body }).catch(() => void 0);
+  }
+  const commands = [
+    orca.commands.register("cvhub.signIn", async () => {
+      try {
+        const status = await authStatus();
+        if (status.connection && !status.connection.expired) {
+          await refreshStatusItem();
+          await notify("CV Hub", `Already signed in as @${status.connection.username}.`);
+          return;
+        }
+        const attempt = await connection.start(status.apiOrigin);
+        await notify(
+          "CV Hub sign-in started",
+          `Open the CV Hub panel in Orca\u2019s right sidebar and continue with code ${attempt.userCode}.`
+        );
+      } catch (error2) {
+        await notify("CV Hub sign-in failed", sanitize(error2).message.replace(/^\[[a-z_]+\] /, ""));
+      }
+    }),
+    orca.commands.register("cvhub.signOut", async () => {
+      try {
+        await connection.disconnect();
+        await refreshStatusItem();
+      } catch (error2) {
+        await notify("CV Hub sign-out failed", sanitize(error2).message.replace(/^\[[a-z_]+\] /, ""));
+      }
+    }),
+    orca.commands.register("cvhub.refresh", async () => {
+      await refocus(lastWorkspaceId);
+      await refreshStatusItem();
+    })
+  ];
+  void publishAuth();
+  void refocus(lastWorkspaceId);
+  return () => {
+    clearInterval(statusTimer);
+    events.dispose();
+    for (const command of commands) command.dispose();
+  };
 }
+var cleanup = null;
 function activate(orca) {
-  registerCommands(orca);
+  cleanup = registerPlugin(orca);
+}
+async function deactivate() {
+  cleanup?.();
+  cleanup = null;
 }
 export {
+  deactivate,
   activate as default,
-  registerCommands,
+  registerPlugin,
   sanitize
 };
 /*! Bundled license information:
