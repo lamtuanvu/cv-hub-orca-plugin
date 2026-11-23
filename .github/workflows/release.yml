@@ -1,10 +1,11 @@
 name: Build and release
 
-# Every push to main builds, tests and packages the plugin, then publishes it:
-# - the first push at a new version (no v<version> tag yet) creates the v<version> release;
-# - later pushes at the same version refresh the rolling "edge" prerelease.
-# A new version also gets a plugin-v<version> tag and moves the dist branch: commits that
-# hold only the built plugin, so Orca can install it from Git or from orca-marketplace.json.
+# Every push to main builds, tests and packages the plugin, then publishes it.
+# A new version (no v<version> tag yet) gets a commit holding only the built plugin
+# (orca-plugin.json, main.mjs, panel.html), tagged v<version> and pushed to the dist branch,
+# plus a GitHub release with the zip. Orca installs a Git plugin from its newest vX.Y.Z tag
+# and the Orca plugin directory lists those tags, so the tag must point at built files.
+# Later pushes at the same version refresh the rolling "edge" prerelease.
 on:
   push:
     branches: [main]
@@ -46,16 +47,17 @@ jobs:
             echo "::error::package.json is $pkg but PLUGIN_VERSION is $version"
             exit 1
           fi
-          # The build regenerates both files; the committed copies must match.
-          git diff --exit-code -- orca-plugin.json orca-marketplace.json
+          # The build regenerates the manifest; the committed copy must match.
+          git diff --exit-code -- orca-plugin.json
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: controlvector.cv-hub-${{ steps.version.outputs.version }}
+          name: cv-hub-${{ steps.version.outputs.version }}
           path: dist/*.zip
 
       - name: Publish built plugin tag
+        id: publish
         env:
           VERSION: ${{ steps.version.outputs.version }}
           GIT_AUTHOR_NAME: github-actions[bot]
@@ -63,12 +65,13 @@ jobs:
           GIT_COMMITTER_NAME: github-actions[bot]
           GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
         run: |
-          tag="plugin-v$VERSION"
+          tag="v$VERSION"
           if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
             echo "$tag already published"
+            echo "new=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # Build a tree from dist/ alone; Orca copies the whole checkout into the install.
+          # Build a tree from dist/ alone; Orca installs the whole checkout of the tag.
           export GIT_INDEX_FILE="$RUNNER_TEMP/dist.index"
           git --work-tree=dist add main.mjs panel.html orca-plugin.json
           tree=$(git write-tree)
@@ -76,29 +79,31 @@ jobs:
           if git fetch -q origin dist 2>/dev/null; then parent=(-p FETCH_HEAD); fi
           commit=$(git commit-tree "$tree" "${parent[@]}" \
             -m "CV Hub for Orca $VERSION" -m "Built from $GITHUB_SHA.")
-          git tag "$tag" "$commit"
+          git tag -a "$tag" -m "CV Hub for Orca $VERSION" "$commit"
           git push origin "refs/tags/$tag" "$commit:refs/heads/dist"
+          echo "new=true" >> "$GITHUB_OUTPUT"
 
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
+          NEW: ${{ steps.publish.outputs.new }}
         run: |
-          zip="dist/controlvector.cv-hub-$VERSION.zip"
+          zip="dist/cv-hub-$VERSION.zip"
           short=$(git rev-parse --short HEAD)
-          notes="Requires the [lamtuanvu/orca](https://github.com/lamtuanvu/orca) build of Orca; stock Orca cannot load this plugin. In Orca, open Settings → Plugins and install this zip (Install → Zip file), or update an existing install in place with Update…."
-          if ! git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+          notes="For Orca 1.4.248 or newer. Install with: orca plugin install lamtuanvu/cv-hub-orca-plugin (or from the Orca plugin directory), then review and enable it. Built from $GITHUB_SHA."
+          if [ "$NEW" = "true" ]; then
             gh release create "v$VERSION" "$zip" \
-              --target "$GITHUB_SHA" \
+              --verify-tag \
               --title "CV Hub for Orca $VERSION" \
               --notes "$notes"
           else
             git tag -f edge "$GITHUB_SHA"
             git push -f origin refs/tags/edge
             gh release delete edge --yes 2>/dev/null || true
-            cp "$zip" dist/controlvector.cv-hub-edge.zip
-            gh release create edge dist/controlvector.cv-hub-edge.zip \
+            cp "$zip" dist/cv-hub-edge.zip
+            gh release create edge dist/cv-hub-edge.zip \
               --prerelease --latest=false \
               --title "CV Hub for Orca $VERSION (edge $short)" \
-              --notes "Latest build of main at $short. $notes"
+              --notes "Latest build of main at $short. Not a tagged release; install v$VERSION for a pinned build."
           fi

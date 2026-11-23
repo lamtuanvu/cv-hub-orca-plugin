@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { candidateRepos, repoFromRemote } from "./workspace-repo";
+import { candidateRepos, remotesFromGitOutput, repoFromRemote } from "./workspace-repo";
 
 const API = "https://api.hub.controlvector.io";
 describe("mapping a git remote to a CV Hub repository", () => {
@@ -33,5 +33,24 @@ describe("mapping a git remote to a CV Hub repository", () => {
         { name: "mirror", url: "git@git.hub.controlvector.io:me/demo.git" },
       ]),
     ).toEqual([{ owner: "me", repo: "demo" }, { owner: "acme", repo: "up" }]);
+  });
+
+  it("parses `git remote -v` output, keeping one fetch URL per remote", () => {
+    expect(
+      remotesFromGitOutput(
+        [
+          "origin\thttps://git.hub.controlvector.io/acme/widgets.git (fetch)",
+          "origin\thttps://git.hub.controlvector.io/acme/widgets.git (push)",
+          "upstream\thttps://github.com/acme/widgets.git (fetch)",
+          "upstream\thttps://github.com/acme/widgets.git (push)",
+          "",
+          "not a remote line",
+        ].join("\n"),
+      ),
+    ).toEqual([
+      { name: "origin", url: "https://git.hub.controlvector.io/acme/widgets.git" },
+      { name: "upstream", url: "https://github.com/acme/widgets.git" },
+    ]);
+    expect(remotesFromGitOutput("")).toEqual([]);
   });
 });

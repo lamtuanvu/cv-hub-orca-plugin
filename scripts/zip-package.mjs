@@ -15,7 +15,7 @@ const files = [
 for (const file of files) {
   assert.ok((await lstat(new URL(file, dist))).isFile(), `${file} must be a regular file`);
 }
-const name = `${manifest.publisher}.${manifest.id}-${manifest.version}.zip`;
+const name = `cv-hub-${manifest.version}.zip`;
 await rm(new URL(name, dist), { force: true });
 execFileSync("zip", ["-X", "-q", name, ...files], { cwd: dist, stdio: "inherit" });
 console.log(`Plugin zip: dist/${name}`);

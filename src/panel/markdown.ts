@@ -1,76 +1,82 @@
-import { h, type Child } from "./dom";
+import DOMPurify from "dompurify";
+import { Marked } from "marked";
+import { openExternal } from "./bridge";
 
-/** Safe Markdown subset built as DOM nodes — never innerHTML. Links render as text plus their
- *  address: the sandboxed panel cannot navigate, and nothing here pretends it can. */
-function inline(text: string): Child[] {
-  const out: Child[] = [];
-  const re = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\[[^\]]+\]\([^)\s]+\))/g;
-  let last = 0;
-  for (let m = re.exec(text); m; m = re.exec(text)) {
-    if (m.index > last) out.push(text.slice(last, m.index));
-    const token = m[0];
-    if (m[1]) out.push(h("code", null, token.slice(1, -1)));
-    else if (m[2]) out.push(h("strong", null, token.slice(2, -2)));
-    else {
-      const label = token.slice(1, token.indexOf("]"));
-      const href = token.slice(token.indexOf("(") + 1, -1);
-      out.push(h("span", { class: "mdlink", title: href }, label), h("span", { class: "mut xs" }, ` (${href})`));
-    }
-    last = m.index + token.length;
-  }
-  if (last < text.length) out.push(text.slice(last));
-  return out;
+/** GitHub-flavored Markdown for PR descriptions and review bodies, the way CV Hub shows them.
+ *  `marked` parses; DOMPurify then keeps only formatting tags, so author-written HTML can't
+ *  run script, load anything or restyle the panel. Raw HTML in the source is shown as text. */
+const parser = new Marked({ gfm: true, breaks: false, async: false });
+parser.use({
+  renderer: {
+    html: ({ text }) => escapeHtml(text),
+  },
+});
+
+const ALLOWED_TAGS = [
+  "p", "br", "hr", "h1", "h2", "h3", "h4", "h5", "h6", "strong", "b", "em", "i", "del", "s",
+  "code", "pre", "blockquote", "ul", "ol", "li", "a", "table", "thead", "tbody", "tr", "th", "td",
+  "input", "span", "sup", "sub", "kbd",
+];
+const ALLOWED_ATTR = ["href", "title", "align", "type", "checked", "disabled", "start"];
+
+function escapeHtml(text: string): string {
+  return text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 }
-export function markdown(source: string): HTMLElement {
-  const root = h("div", { class: "md" });
-  const lines = source.replace(/\r\n/g, "\n").split("\n");
-  let para: string[] = [];
-  let list: { ordered: boolean; items: string[] } | null = null;
-  const flushPara = () => {
-    if (para.length) root.append(h("p", null, inline(para.join(" "))));
-    para = [];
-  };
-  const flushList = () => {
-    if (list) root.append(h(list.ordered ? "ol" : "ul", null, list.items.map((i) => h("li", null, inline(i)))));
-    list = null;
-  };
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (line.startsWith("```")) {
-      flushPara();
-      flushList();
-      const code: string[] = [];
-      for (i++; i < lines.length && !lines[i].startsWith("```"); i++) code.push(lines[i]);
-      root.append(h("pre", null, h("code", null, code.join("\n"))));
-      continue;
-    }
-    const heading = /^(#{1,6})\s+(.*)$/.exec(line);
-    if (heading) {
-      flushPara();
-      flushList();
-      root.append(h("h4", null, inline(heading[2])));
-      continue;
-    }
-    const item = /^\s*([-*+]|\d+[.)])\s+(.*)$/.exec(line);
-    if (item) {
-      flushPara();
-      const ordered = /\d/.test(item[1]);
-      if (!list || list.ordered !== ordered) {
-        flushList();
-        list = { ordered, items: [] };
-      }
-      list.items.push(item[2]);
-      continue;
-    }
-    if (!line.trim()) {
-      flushPara();
-      flushList();
-      continue;
-    }
-    flushList();
-    para.push(line.trim());
+
+/** Only web and mail links leave the panel, through Orca's browser prompt. */
+function safeHref(href: string | null): string | null {
+  if (!href) return null;
+  try {
+    const url = new URL(href);
+    return ["https:", "http:", "mailto:"].includes(url.protocol) ? url.href : null;
+  } catch {
+    return null;
   }
-  flushPara();
-  flushList();
+}
+
+export function markdown(source: string): HTMLElement {
+  const root = document.createElement("div");
+  root.className = "md";
+  if (!DOMPurify.isSupported) {
+    // No sanitizer here: show the source as text rather than unsanitized HTML.
+    const pre = document.createElement("p");
+    pre.style.whiteSpace = "pre-wrap";
+    pre.textContent = source;
+    root.append(pre);
+    return root;
+  }
+  const html = parser.parse(source, { async: false }) as string;
+  root.append(
+    DOMPurify.sanitize(html, {
+      ALLOWED_TAGS,
+      ALLOWED_ATTR,
+      ALLOW_DATA_ATTR: false,
+      RETURN_DOM_FRAGMENT: true,
+    }),
+  );
+  for (const box of root.querySelectorAll("input")) {
+    if (box.type !== "checkbox") box.remove();
+    else box.disabled = true;
+  }
+  for (const a of root.querySelectorAll("a")) {
+    const href = safeHref(a.getAttribute("href"));
+    a.removeAttribute("href");
+    if (!href) {
+      a.replaceWith(...a.childNodes);
+      continue;
+    }
+    a.className = "mdlink";
+    a.title = href;
+    a.tabIndex = 0;
+    a.setAttribute("role", "link");
+    const open = (event: Event) => {
+      event.preventDefault();
+      void openExternal(href);
+    };
+    a.addEventListener("click", open);
+    a.addEventListener("keydown", (event) => {
+      if ((event as KeyboardEvent).key === "Enter") open(event);
+    });
+  }
   return root;
 }
