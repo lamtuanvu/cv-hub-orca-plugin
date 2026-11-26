@@ -4,7 +4,7 @@
   "execution": "trusted-worker",
   "id": "cv-hub",
   "name": "CV Hub",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "Browse CV Hub repositories and pull requests in Orca: read diffs, checks and review history, submit reviews, and search code. Signs in with CV Hub in your browser.",
   "license": "MIT",
   "repository": "https://github.com/lamtuanvu/cv-hub-orca-plugin",
