@@ -307,7 +307,9 @@ function authScreen() {
   const a = S.attempt;
   const box = h("div", { class: "abox" }, brand());
   const wrap = h("div", { class: `auth ${S.wide ? "wide" : ""}` }, box);
-  if (S.conn?.expired) {
+  // Once "Sign in again" starts a new attempt, show that attempt (code, progress or error)
+  // rather than this notice, which would otherwise hide it while the old session is expired.
+  if (S.conn?.expired && !S.attempt && !S.auth.busy && !S.auth.error) {
     add(
       box,
       h(
